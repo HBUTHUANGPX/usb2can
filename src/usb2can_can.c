@@ -12,6 +12,14 @@
 
 /** @brief 当前注册的 CAN 接收回调。 */
 static Usb2CanCanRxCallback g_usb2can_can_rx_callback = NULL;
+/** @brief RXFIFO0 满计数。 */
+static volatile uint32_t g_usb2can_can_rxfifo0_full_count = 0U;
+/** @brief RXFIFO0 丢帧计数。 */
+static volatile uint32_t g_usb2can_can_rxfifo0_lost_count = 0U;
+/** @brief RXFIFO1 满计数。 */
+static volatile uint32_t g_usb2can_can_rxfifo1_full_count = 0U;
+/** @brief RXFIFO1 丢帧计数。 */
+static volatile uint32_t g_usb2can_can_rxfifo1_lost_count = 0U;
 
 #if defined(MCAN_SOC_MSG_BUF_IN_AHB_RAM) && (MCAN_SOC_MSG_BUF_IN_AHB_RAM == 1)
 /**
@@ -53,9 +61,26 @@ static void usb2can_can_convert_rx_message(const mcan_rx_message_t* source,
 SDK_DECLARE_EXT_ISR_M(BOARD_APP_CAN_IRQn, usb2can_can_isr)
 void usb2can_can_isr(void) {
   uint32_t flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
-  const uint32_t rx_flags = flags & MCAN_EVENT_RECEIVE;
+  const uint32_t fifo0_flags =
+      MCAN_INT_RXFIFO0_NEW_MSG | MCAN_INT_RXFIFO0_FULL |
+      MCAN_INT_RXFIFO0_MSG_LOST;
+  const uint32_t fifo1_flags =
+      MCAN_INT_RXFIFO1_NEW_MSG | MCAN_INT_RXFIFO1_FULL |
+      MCAN_INT_RXFIFO1_MSG_LOST;
+  const uint32_t rx_flags = flags & (MCAN_EVENT_RECEIVE | fifo0_flags |
+                                     fifo1_flags);
 
-  if ((flags & MCAN_INT_RXFIFO0_NEW_MSG) != 0U) {
+  if ((flags & MCAN_INT_RXFIFO0_FULL) != 0U) {
+    g_usb2can_can_rxfifo0_full_count++;
+    printf("[usb2can][can-isr] rxfifo0 full count=%lu\n",
+           (unsigned long)g_usb2can_can_rxfifo0_full_count);
+  }
+  if ((flags & MCAN_INT_RXFIFO0_MSG_LOST) != 0U) {
+    g_usb2can_can_rxfifo0_lost_count++;
+    printf("[usb2can][can-isr] rxfifo0 lost count=%lu\n",
+           (unsigned long)g_usb2can_can_rxfifo0_lost_count);
+  }
+  if ((flags & fifo0_flags) != 0U) {
     while (MCAN_RXF0S_F0FL_GET(BOARD_APP_CAN_BASE->RXF0S) > 0U) {
       Usb2CanStandardFrame frame;
 
@@ -75,7 +100,17 @@ void usb2can_can_isr(void) {
     }
   }
 
-  if ((flags & MCAN_INT_RXFIFO1_NEW_MSG) != 0U) {
+  if ((flags & MCAN_INT_RXFIFO1_FULL) != 0U) {
+    g_usb2can_can_rxfifo1_full_count++;
+    printf("[usb2can][can-isr] rxfifo1 full count=%lu\n",
+           (unsigned long)g_usb2can_can_rxfifo1_full_count);
+  }
+  if ((flags & MCAN_INT_RXFIFO1_MSG_LOST) != 0U) {
+    g_usb2can_can_rxfifo1_lost_count++;
+    printf("[usb2can][can-isr] rxfifo1 lost count=%lu\n",
+           (unsigned long)g_usb2can_can_rxfifo1_lost_count);
+  }
+  if ((flags & fifo1_flags) != 0U) {
     while (MCAN_RXF1S_F1FL_GET(BOARD_APP_CAN_BASE->RXF1S) > 0U) {
       if (mcan_read_rxfifo(BOARD_APP_CAN_BASE, 1U,
                            (mcan_rx_message_t*)&g_usb2can_last_rx_message) !=
@@ -132,7 +167,10 @@ Usb2CanStatus usb2can_can_init(const Usb2CanCanConfig* config,
   mcan_get_default_config(BOARD_APP_CAN_BASE, &mcan_config);
   mcan_config.enable_canfd = false;
   mcan_config.baudrate = config->baudrate;
-  mcan_config.interrupt_mask = MCAN_EVENT_RECEIVE;
+  mcan_config.interrupt_mask =
+      MCAN_EVENT_RECEIVE | MCAN_INT_RXFIFO0_FULL |
+      MCAN_INT_RXFIFO0_MSG_LOST | MCAN_INT_RXFIFO1_FULL |
+      MCAN_INT_RXFIFO1_MSG_LOST;
   mcan_config.txbuf_trans_interrupt_mask = 0U;
   mcan_config.txbuf_cancel_finish_interrupt_mask = 0U;
 
