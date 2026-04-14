@@ -25,6 +25,8 @@ ATTR_PLACE_AT(".ahb_sram") static uint32_t g_usb2can_can_msg_buffer
 
 /** @brief 最近收到的一条 MCAN 原始消息。 */
 static volatile mcan_rx_message_t g_usb2can_last_rx_message;
+/** @brief CAN 调试打印计数。 */
+static volatile uint32_t g_usb2can_can_debug_print_count = 0U;
 
 /**
  * @brief 将 MCAN 驱动消息对象翻译为项目内部标准 CAN 帧。
@@ -62,11 +64,26 @@ void usb2can_can_isr(void) {
                            (mcan_rx_message_t*)&g_usb2can_last_rx_message);
     usb2can_can_convert_rx_message(
         (const mcan_rx_message_t*)&g_usb2can_last_rx_message, &frame);
+    g_usb2can_can_debug_print_count++;
+    if (g_usb2can_can_debug_print_count <= 10U ||
+        (g_usb2can_can_debug_print_count % 32U) == 0U) {
+      printf("[usb2can][can-isr] rx_count=%lu flags=0x%08lX can_id=0x%03X "
+             "dlc=%u\n",
+             (unsigned long)g_usb2can_can_debug_print_count,
+             (unsigned long)flags, frame.can_id, frame.dlc);
+    }
     if (g_usb2can_can_rx_callback != NULL) {
       g_usb2can_can_rx_callback(&frame);
+    } else {
+      printf("[usb2can][can-isr] rx callback is null\n");
     }
     handled_flags |= MCAN_INT_RXFIFO0_NEW_MSG;
     flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
+  }
+
+  if ((flags != 0U) && ((flags & MCAN_INT_RXFIFO0_NEW_MSG) == 0U)) {
+    printf("[usb2can][can-isr] non-rxfifo0 flags=0x%08lX\n",
+           (unsigned long)flags);
   }
 
   if (handled_flags != 0U) {
@@ -96,6 +113,8 @@ Usb2CanStatus usb2can_can_init(const Usb2CanCanConfig* config,
 
   board_init_can(BOARD_APP_CAN_BASE);
   can_clock = board_init_can_clock(BOARD_APP_CAN_BASE);
+  printf("[usb2can][can] init baudrate=%lu can_clock=%lu\n",
+         (unsigned long)config->baudrate, (unsigned long)can_clock);
 
 #if defined(MCAN_SOC_MSG_BUF_IN_AHB_RAM) && (MCAN_SOC_MSG_BUF_IN_AHB_RAM == 1)
   {
@@ -116,10 +135,14 @@ Usb2CanStatus usb2can_can_init(const Usb2CanCanConfig* config,
 
   if (mcan_init(BOARD_APP_CAN_BASE, &mcan_config, can_clock) !=
       status_success) {
+    printf("[usb2can][can] mcan_init failed\n");
     return kUsb2CanStatusIoError;
   }
 
+  printf("[usb2can][can] mcan_init ok interrupt_mask=0x%08lX\n",
+         (unsigned long)mcan_config.interrupt_mask);
   intc_m_enable_irq_with_priority(BOARD_APP_CAN_IRQn, 1);
+  printf("[usb2can][can] irq enabled irqn=%d\n", (int)BOARD_APP_CAN_IRQn);
   return kUsb2CanStatusOk;
 }
 
@@ -145,7 +168,10 @@ Usb2CanStatus usb2can_can_send(const Usb2CanStandardFrame* frame) {
   tx_frame.dlc = frame->dlc;
   memcpy(tx_frame.data_8, frame->payload, frame->dlc);
 
+  printf("[usb2can][can] tx can_id=0x%03X dlc=%u\n", frame->can_id, frame->dlc);
+
   if (mcan_transmit_blocking(BOARD_APP_CAN_BASE, &tx_frame) != status_success) {
+    printf("[usb2can][can] mcan_transmit_blocking failed\n");
     return kUsb2CanStatusIoError;
   }
 
