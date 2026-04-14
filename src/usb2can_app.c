@@ -27,7 +27,7 @@
 /** @brief CAN 接收报文上报任务优先级。 */
 #define USB2CAN_APP_CAN_REPORT_TASK_PRIORITY (configMAX_PRIORITIES - 5U)
 /** @brief CAN 接收报文上报任务栈大小。 */
-#define USB2CAN_APP_CAN_REPORT_TASK_STACK_SIZE 2048U
+#define USB2CAN_APP_CAN_REPORT_TASK_STACK_SIZE (configMINIMAL_STACK_SIZE + 256U)
 
 /**
  * @brief 将一条 CAN 帧封装为 USB 协议并发往主机。
@@ -185,11 +185,13 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
   g_usb2can_can_report_queue = xQueueCreate(USB2CAN_APP_CAN_REPORT_QUEUE_LENGTH,
                                             sizeof(Usb2CanStandardFrame));
   if (g_usb2can_can_report_queue == NULL) {
+    printf("usb2can can report queue create failed.\n");
     return kUsb2CanStatusIoError;
   }
   if (xTaskCreate(usb2can_app_can_report_task, "usb2can_can_report",
                   USB2CAN_APP_CAN_REPORT_TASK_STACK_SIZE, NULL,
                   USB2CAN_APP_CAN_REPORT_TASK_PRIORITY, NULL) != pdPASS) {
+    printf("usb2can can report task create failed.\n");
     return kUsb2CanStatusIoError;
   }
   usb2can_protocol_parser_init(
@@ -198,11 +200,13 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
       sizeof(g_usb2can_parser_payload_buffer));
 
   if (usb2can_usb_init(usb2can_app_on_usb_rx) != kUsb2CanStatusOk) {
+    printf("usb2can usb init failed.\n");
     return kUsb2CanStatusIoError;
   }
   can_config.baudrate = g_usb2can_app_config.can_baudrate;
   if (usb2can_can_init(&can_config, usb2can_app_on_can_rx) !=
       kUsb2CanStatusOk) {
+    printf("usb2can can init failed.\n");
     return kUsb2CanStatusIoError;
   }
 
