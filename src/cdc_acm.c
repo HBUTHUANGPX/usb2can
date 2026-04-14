@@ -203,18 +203,12 @@ static void usb2can_cdc_event_handler(uint8_t busid, uint8_t event) {
       g_usb2can_cdc_ready = false;
       g_usb2can_cdc_dtr = false;
       g_usb2can_cdc_tx_busy = false;
-      if (g_usb2can_cdc_tx_done != NULL) {
-        (void)xSemaphoreGive(g_usb2can_cdc_tx_done);
-      }
       break;
     case USBD_EVENT_DISCONNECTED:
       printf("[usb2can][cdc] disconnected bus=%u\n", busid);
       g_usb2can_cdc_ready = false;
       g_usb2can_cdc_dtr = false;
       g_usb2can_cdc_tx_busy = false;
-      if (g_usb2can_cdc_tx_done != NULL) {
-        (void)xSemaphoreGive(g_usb2can_cdc_tx_done);
-      }
       break;
     default:
       break;
@@ -401,8 +395,5 @@ void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr) {
   g_usb2can_cdc_ready = dtr;
   if (!dtr) {
     g_usb2can_cdc_tx_busy = false;
-    if (g_usb2can_cdc_tx_done != NULL) {
-      (void)xSemaphoreGive(g_usb2can_cdc_tx_done);
-    }
   }
 }
