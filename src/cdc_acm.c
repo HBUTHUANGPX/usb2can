@@ -84,6 +84,8 @@ static Usb2CanUsbRxCallback g_usb2can_cdc_rx_callback = NULL;
 static volatile bool g_usb2can_cdc_ready = false;
 /** @brief 标记主机是否已经打开 DTR。 */
 static volatile bool g_usb2can_cdc_dtr = false;
+/** @brief 标记 CDC IN 端点当前是否正在发送。 */
+static volatile bool g_usb2can_cdc_tx_busy = false;
 /** @brief 发送完成同步信号量。 */
 static SemaphoreHandle_t g_usb2can_cdc_tx_done = NULL;
 /** @brief USB 接口对象。 */
@@ -199,6 +201,10 @@ static void usb2can_cdc_event_handler(uint8_t busid, uint8_t event) {
     case USBD_EVENT_DISCONNECTED:
       g_usb2can_cdc_ready = false;
       g_usb2can_cdc_dtr = false;
+      g_usb2can_cdc_tx_busy = false;
+      if (g_usb2can_cdc_tx_done != NULL) {
+        (void)xSemaphoreGive(g_usb2can_cdc_tx_done);
+      }
       break;
     default:
       break;
@@ -239,6 +245,7 @@ void usbd_cdc_acm_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes) {
     return;
   }
 
+  g_usb2can_cdc_tx_busy = false;
   if (g_usb2can_cdc_tx_done != NULL) {
     BaseType_t x_higher_priority_task_woken = pdFALSE;
     xSemaphoreGiveFromISR(g_usb2can_cdc_tx_done, &x_higher_priority_task_woken);
@@ -264,6 +271,7 @@ Usb2CanStatus usb2can_cdc_acm_init(Usb2CanUsbRxCallback rx_callback) {
   g_usb2can_cdc_rx_callback = rx_callback;
   g_usb2can_cdc_ready = false;
   g_usb2can_cdc_dtr = false;
+  g_usb2can_cdc_tx_busy = false;
 
   if (g_usb2can_cdc_tx_done == NULL) {
     g_usb2can_cdc_tx_done = xSemaphoreCreateBinary();
@@ -309,13 +317,26 @@ Usb2CanStatus usb2can_cdc_acm_send(const uint8_t* data, size_t length) {
     return kUsb2CanStatusIoError;
   }
 
+  while (g_usb2can_cdc_tx_busy) {
+    if (xSemaphoreTake(g_usb2can_cdc_tx_done, portMAX_DELAY) != pdTRUE) {
+      return kUsb2CanStatusIoError;
+    }
+  }
+
   memcpy(g_usb2can_cdc_write_buffer, data, length);
   while (xSemaphoreTake(g_usb2can_cdc_tx_done, 0U) == pdTRUE) {
   }
-  usbd_ep_start_write(USB2CAN_CONFIG_USB_BUS_ID, USB2CAN_CDC_IN_EP,
-                      g_usb2can_cdc_write_buffer,
-                      (uint32_t)length);
+  g_usb2can_cdc_tx_busy = true;
+  if (usbd_ep_start_write(USB2CAN_CONFIG_USB_BUS_ID, USB2CAN_CDC_IN_EP,
+                          g_usb2can_cdc_write_buffer,
+                          (uint32_t)length) != 0) {
+    g_usb2can_cdc_tx_busy = false;
+    return kUsb2CanStatusIoError;
+  }
   if (xSemaphoreTake(g_usb2can_cdc_tx_done, portMAX_DELAY) != pdTRUE) {
+    return kUsb2CanStatusIoError;
+  }
+  if (!g_usb2can_cdc_ready) {
     return kUsb2CanStatusIoError;
   }
 
@@ -343,4 +364,10 @@ void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr) {
   (void)intf;
   g_usb2can_cdc_dtr = dtr;
   g_usb2can_cdc_ready = dtr;
+  if (!dtr) {
+    g_usb2can_cdc_tx_busy = false;
+    if (g_usb2can_cdc_tx_done != NULL) {
+      (void)xSemaphoreGive(g_usb2can_cdc_tx_done);
+    }
+  }
 }
