@@ -80,6 +80,12 @@ def build_protocol_frame(can_id: int, payload: bytes) -> bytes:
     return header + header_crc + data_crc + data
 
 
+def build_batched_frames(frame: bytes, count: int) -> bytes:
+    if count < 0:
+        raise ValueError("count must be >= 0")
+    return frame * count
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send USB2CAN test frames over USB CDC ACM.")
     parser.add_argument("--port", default=DEFAULT_PORT, help="Serial device path.")
@@ -102,11 +108,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.1,
         help="Seconds between frames when count > 1.",
     )
+    parser.add_argument(
+        "--pack-count",
+        action="store_true",
+        help="When count > 0, pack count protocol frames into one CDC write.",
+    )
     args = parser.parse_args(argv)
     if args.count < 0:
         parser.error("--count must be >= 0")
     if args.interval < 0:
         parser.error("--interval must be >= 0")
+    if args.pack_count and args.count == 0:
+        parser.error("--pack-count requires --count > 0")
     return args
 
 
@@ -128,12 +141,22 @@ def main(argv: list[str] | None = None) -> int:
     print(f"usb_frame[{len(frame)}]: {format_hex(frame)}")
     if args.count == 0:
         print("mode: continuous")
+    elif args.pack_count:
+        print(f"mode: finite batched ({args.count} frames in one write)")
     else:
         print(f"mode: finite ({args.count} frames)")
 
     try:
         with serial.Serial(args.port, baudrate=args.baudrate, timeout=1) as ser:
             index = 0
+            if args.pack_count:
+                batched_frames = build_batched_frames(frame, args.count)
+                written = ser.write(batched_frames)
+                ser.flush()
+                index = args.count
+                print(f"sent one batch with {args.count} frames, wrote {written} bytes")
+                return 0
+
             while args.count == 0 or index < args.count:
                 written = ser.write(frame)
                 ser.flush()

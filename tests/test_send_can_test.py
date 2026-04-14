@@ -19,6 +19,13 @@ class BuildPacketTest(unittest.TestCase):
             bytes([0xA5, 0x01, 0x07, 0x00, 0x2B, 0x2F, 0x56, 0x23, 0x01, 0x04, 0x11, 0x22, 0x33, 0x44]),
         )
 
+    def test_build_batched_frames_repeats_frame_count_times(self):
+        frame = bytes([0xAA, 0xBB, 0xCC])
+
+        batched = send_can_test.build_batched_frames(frame, 4)
+
+        self.assertEqual(batched, frame * 4)
+
 
 class ParseArgsTest(unittest.TestCase):
     def test_parse_args_uses_expected_defaults(self):
@@ -35,6 +42,16 @@ class ParseArgsTest(unittest.TestCase):
 
         self.assertEqual(args.count, 10)
         self.assertAlmostEqual(args.interval, 0.01)
+
+    def test_parse_args_accepts_pack_count_for_finite_mode(self):
+        args = send_can_test.parse_args(["--count", "10", "--pack-count"])
+
+        self.assertEqual(args.count, 10)
+        self.assertTrue(args.pack_count)
+
+    def test_parse_args_rejects_pack_count_in_continuous_mode(self):
+        with self.assertRaises(SystemExit):
+            send_can_test.parse_args(["--pack-count"])
 
 
 if __name__ == "__main__":
