@@ -8,9 +8,6 @@ import sys
 import time
 from typing import Iterable
 
-import serial
-
-
 PROTOCOL_HEAD = 0xA5
 CMD_CAN_TX = 0x01
 DEFAULT_PORT = "/dev/ttyACM0"
@@ -84,7 +81,7 @@ def build_protocol_frame(can_id: int, payload: bytes) -> bytes:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Send one USB2CAN test frame over USB CDC ACM.")
+    parser = argparse.ArgumentParser(description="Send USB2CAN test frames over USB CDC ACM.")
     parser.add_argument("--port", default=DEFAULT_PORT, help="Serial device path.")
     parser.add_argument("--baudrate", type=int, default=115200, help="Host serial baudrate setting.")
     parser.add_argument("--can-id", default=hex(DEFAULT_CAN_ID), help="Standard CAN ID, e.g. 0x123.")
@@ -93,7 +90,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=format_hex(DEFAULT_DATA),
         help="CAN payload bytes in hex, e.g. '11 22 33 44'.",
     )
-    parser.add_argument("--count", type=int, default=1, help="Number of frames to send.")
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=0,
+        help="Number of frames to send. Use 0 for continuous sending.",
+    )
     parser.add_argument(
         "--interval",
         type=float,
@@ -101,14 +103,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Seconds between frames when count > 1.",
     )
     args = parser.parse_args(argv)
-    if args.count < 1:
-        parser.error("--count must be >= 1")
+    if args.count < 0:
+        parser.error("--count must be >= 0")
     if args.interval < 0:
         parser.error("--interval must be >= 0")
     return args
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        import serial
+    except ModuleNotFoundError:
+        print("pyserial is required, install it with: pip install pyserial", file=sys.stderr)
+        return 1
+
     args = parse_args(argv)
     can_id = parse_can_id(args.can_id)
     payload = parse_data_bytes(args.data)
@@ -118,18 +126,29 @@ def main(argv: list[str] | None = None) -> int:
     print(f"can_id: 0x{can_id:03X}")
     print(f"payload[{len(payload)}]: {format_hex(payload)}")
     print(f"usb_frame[{len(frame)}]: {format_hex(frame)}")
+    if args.count == 0:
+        print("mode: continuous")
+    else:
+        print(f"mode: finite ({args.count} frames)")
 
     try:
         with serial.Serial(args.port, baudrate=args.baudrate, timeout=1) as ser:
-            for index in range(args.count):
+            index = 0
+            while args.count == 0 or index < args.count:
                 written = ser.write(frame)
                 ser.flush()
-                print(f"sent {index + 1}/{args.count}, wrote {written} bytes")
-                if index + 1 < args.count and args.interval > 0:
+                index += 1
+                if args.count == 0:
+                    print(f"sent {index}, wrote {written} bytes")
+                else:
+                    print(f"sent {index}/{args.count}, wrote {written} bytes")
+                if (args.count == 0 or index < args.count) and args.interval > 0:
                     time.sleep(args.interval)
     except serial.SerialException as exc:
         print(f"serial open/send failed: {exc}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print(f"\nstopped by user after sending {index} frame(s)")
 
     return 0
 

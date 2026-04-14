@@ -27,8 +27,14 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual(args.port, "/dev/ttyACM0")
         self.assertEqual(args.can_id, "0x123")
         self.assertEqual(args.data, "11 22 33 44")
-        self.assertEqual(args.count, 1)
+        self.assertEqual(args.count, 0)
         self.assertAlmostEqual(args.interval, 0.1)
+
+    def test_parse_args_accepts_finite_burst_mode(self):
+        args = send_can_test.parse_args(["--count", "10", "--interval", "0.01"])
+
+        self.assertEqual(args.count, 10)
+        self.assertAlmostEqual(args.interval, 0.01)
 
 
 if __name__ == "__main__":

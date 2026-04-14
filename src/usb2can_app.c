@@ -28,14 +28,20 @@
 #define USB2CAN_APP_USB_TX_QUEUE_LENGTH 64U
 /** @brief CAN 接收软件环形缓冲区深度。 */
 #define USB2CAN_APP_CAN_RX_RING_LENGTH 128U
+/** @brief CAN 发送软件环形缓冲区深度。 */
+#define USB2CAN_APP_CAN_TX_RING_LENGTH 128U
 /** @brief USB 原始输入处理任务优先级。 */
 #define USB2CAN_APP_USB_RX_TASK_PRIORITY (configMAX_PRIORITIES - 4U)
 /** @brief USB 发送任务优先级。 */
 #define USB2CAN_APP_USB_TX_TASK_PRIORITY (configMAX_PRIORITIES - 5U)
+/** @brief CAN 发送任务优先级。 */
+#define USB2CAN_APP_CAN_TX_TASK_PRIORITY (configMAX_PRIORITIES - 5U)
 /** @brief USB 原始输入处理任务栈大小。 */
 #define USB2CAN_APP_USB_RX_TASK_STACK_SIZE (configMINIMAL_STACK_SIZE + 256U)
 /** @brief USB 发送任务栈大小。 */
 #define USB2CAN_APP_USB_TX_TASK_STACK_SIZE (configMINIMAL_STACK_SIZE + 256U)
+/** @brief CAN 发送任务栈大小。 */
+#define USB2CAN_APP_CAN_TX_TASK_STACK_SIZE (configMINIMAL_STACK_SIZE + 256U)
 
 /**
  * @brief 发送一条单字节错误上报。
@@ -93,6 +99,22 @@ typedef struct Usb2CanCanRxRingBuffer {
   uint32_t overflow_count;
 } Usb2CanCanRxRingBuffer;
 
+/**
+ * @brief 描述解析任务与 CAN 发送任务之间共享的 CAN TX 环形缓冲区。
+ */
+typedef struct Usb2CanCanTxRingBuffer {
+  /** @brief 环形缓冲区中的标准 CAN 帧槽位。 */
+  Usb2CanStandardFrame frames[USB2CAN_APP_CAN_TX_RING_LENGTH];
+  /** @brief 下一次写入位置。 */
+  uint32_t write_index;
+  /** @brief 下一次读取位置。 */
+  uint32_t read_index;
+  /** @brief 当前已缓存的帧数。 */
+  uint32_t count;
+  /** @brief 环形缓冲区溢出计数。 */
+  uint32_t overflow_count;
+} Usb2CanCanTxRingBuffer;
+
 /** @brief 保存顶层应用配置。 */
 static Usb2CanAppConfig g_usb2can_app_config;
 /** @brief 保存协议解析器实例。 */
@@ -112,8 +134,12 @@ static QueueHandle_t g_usb2can_usb_rx_queue = NULL;
 static QueueHandle_t g_usb2can_usb_tx_queue = NULL;
 /** @brief CAN RX 软件环形缓冲区。 */
 static Usb2CanCanRxRingBuffer g_usb2can_can_rx_ring = {0};
+/** @brief CAN TX 软件环形缓冲区。 */
+static Usb2CanCanTxRingBuffer g_usb2can_can_tx_ring = {0};
 /** @brief USB 发送任务句柄。 */
 static TaskHandle_t g_usb2can_usb_tx_task_handle = NULL;
+/** @brief CAN 发送任务句柄。 */
+static TaskHandle_t g_usb2can_can_tx_task_handle = NULL;
 
 /**
  * @brief 从 ISR 向 CAN RX 环形缓冲区压入一帧。
@@ -174,6 +200,62 @@ static bool usb2can_app_can_rx_ring_pop(Usb2CanStandardFrame* frame) {
 }
 
 /**
+ * @brief 在任务上下文中向 CAN TX 环形缓冲区压入一帧。
+ *
+ * @param frame 待缓存的标准 CAN 帧。
+ * @return `true` 表示写入成功，`false` 表示环形缓冲区已满。
+ */
+static bool usb2can_app_can_tx_ring_push(const Usb2CanStandardFrame* frame) {
+  bool pushed = false;
+
+  if (frame == NULL) {
+    return false;
+  }
+
+  taskENTER_CRITICAL();
+  if (g_usb2can_can_tx_ring.count < USB2CAN_APP_CAN_TX_RING_LENGTH) {
+    g_usb2can_can_tx_ring.frames[g_usb2can_can_tx_ring.write_index] = *frame;
+    g_usb2can_can_tx_ring.write_index =
+        (g_usb2can_can_tx_ring.write_index + 1U) %
+        USB2CAN_APP_CAN_TX_RING_LENGTH;
+    g_usb2can_can_tx_ring.count++;
+    pushed = true;
+  } else {
+    g_usb2can_can_tx_ring.overflow_count++;
+  }
+  taskEXIT_CRITICAL();
+
+  return pushed;
+}
+
+/**
+ * @brief 在任务上下文中从 CAN TX 环形缓冲区弹出一帧。
+ *
+ * @param frame 输出的一条标准 CAN 帧。
+ * @return `true` 表示成功读到一帧，`false` 表示当前为空。
+ */
+static bool usb2can_app_can_tx_ring_pop(Usb2CanStandardFrame* frame) {
+  bool popped = false;
+
+  if (frame == NULL) {
+    return false;
+  }
+
+  taskENTER_CRITICAL();
+  if (g_usb2can_can_tx_ring.count > 0U) {
+    *frame = g_usb2can_can_tx_ring.frames[g_usb2can_can_tx_ring.read_index];
+    g_usb2can_can_tx_ring.read_index =
+        (g_usb2can_can_tx_ring.read_index + 1U) %
+        USB2CAN_APP_CAN_TX_RING_LENGTH;
+    g_usb2can_can_tx_ring.count--;
+    popped = true;
+  }
+  taskEXIT_CRITICAL();
+
+  return popped;
+}
+
+/**
  * @brief 在任务上下文中处理从 USB 收到的原始字节流。
  *
  * 参考 cangaroo_hpmicro 的处理方式，USB 回调只做最小搬运，真正的协议解析与
@@ -183,6 +265,7 @@ static bool usb2can_app_can_rx_ring_pop(Usb2CanStandardFrame* frame) {
  */
 static void usb2can_app_usb_rx_task(void* parameter) {
   Usb2CanUsbRxChunk chunk;
+  uint32_t last_can_tx_overflow_count = 0U;
 
   (void)parameter;
 
@@ -225,12 +308,53 @@ static void usb2can_app_usb_rx_task(void* parameter) {
           continue;
         }
 
-        if (usb2can_can_send(&frame) != kUsb2CanStatusOk) {
+        if (!usb2can_app_can_tx_ring_push(&frame)) {
           usb2can_app_report_error(kUsb2CanStatusIoError);
+          if (g_usb2can_can_tx_ring.overflow_count !=
+              last_can_tx_overflow_count) {
+            last_can_tx_overflow_count = g_usb2can_can_tx_ring.overflow_count;
+            printf("[usb2can][usb-rx-task] can tx ring overflow count=%lu\n",
+                   (unsigned long)last_can_tx_overflow_count);
+          }
+          continue;
+        }
+
+        if (g_usb2can_can_tx_task_handle != NULL) {
+          xTaskNotifyGive(g_usb2can_can_tx_task_handle);
         }
       } else {
         usb2can_app_report_error(kUsb2CanStatusUnsupported);
       }
+    }
+  }
+}
+
+/**
+ * @brief 在任务上下文中把解析好的标准 CAN 帧发送到总线。
+ *
+ * 该任务把 USB 接收/协议解析与实际 CAN 发送解耦，避免 USB 接收任务被阻塞式
+ * CAN 发送拖住。
+ *
+ * @param parameter 未使用。
+ */
+static void usb2can_app_can_tx_task(void* parameter) {
+  Usb2CanStandardFrame frame;
+  bool did_work = false;
+
+  (void)parameter;
+
+  for (;;) {
+    did_work = false;
+
+    while (usb2can_app_can_tx_ring_pop(&frame)) {
+      did_work = true;
+      if (usb2can_can_send(&frame) != kUsb2CanStatusOk) {
+        usb2can_app_report_error(kUsb2CanStatusIoError);
+      }
+    }
+
+    if (!did_work) {
+      (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     }
   }
 }
@@ -413,6 +537,13 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
                   USB2CAN_APP_USB_TX_TASK_PRIORITY,
                   &g_usb2can_usb_tx_task_handle) != pdPASS) {
     printf("usb2can usb tx task create failed.\n");
+    return kUsb2CanStatusIoError;
+  }
+  if (xTaskCreate(usb2can_app_can_tx_task, "usb2can_can_tx",
+                  USB2CAN_APP_CAN_TX_TASK_STACK_SIZE, NULL,
+                  USB2CAN_APP_CAN_TX_TASK_PRIORITY,
+                  &g_usb2can_can_tx_task_handle) != pdPASS) {
+    printf("usb2can can tx task create failed.\n");
     return kUsb2CanStatusIoError;
   }
   usb2can_protocol_parser_init(
