@@ -46,7 +46,10 @@ Usb2CanAppConfig usb2can_app_get_default_config(void);
 void usb2can_app_on_usb_rx(const uint8_t* data, size_t length);
 
 /**
- * @brief 处理一条来自 CAN 的标准帧。
+ * @brief 在中断上下文中上报一条来自 CAN 的标准帧。
+ *
+ * 该接口供 CAN ISR 调用，只负责把报文转交给后台任务，避免在中断中直接执行 USB
+ * 发送等阻塞操作。
  *
  * @param frame 收到的 CAN 标准帧。
  */

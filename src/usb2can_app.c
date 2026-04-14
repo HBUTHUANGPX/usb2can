@@ -7,6 +7,10 @@
 
 #include <string.h>
 
+#include "FreeRTOS.h"
+#include "queue.h"
+#include "task.h"
+
 #include "usb2can_bridge.h"
 #include "usb2can_can.h"
 #include "usb2can_protocol.h"
@@ -18,6 +22,19 @@
 #define USB2CAN_APP_TX_BUFFER_SIZE USB2CAN_CONFIG_PROTOCOL_TX_FRAME_BUFFER_SIZE
 /** @brief 错误上报负载大小。 */
 #define USB2CAN_APP_ERROR_PAYLOAD_SIZE 1U
+/** @brief CAN 接收报文上报队列深度。 */
+#define USB2CAN_APP_CAN_REPORT_QUEUE_LENGTH 16U
+/** @brief CAN 接收报文上报任务优先级。 */
+#define USB2CAN_APP_CAN_REPORT_TASK_PRIORITY (configMAX_PRIORITIES - 5U)
+/** @brief CAN 接收报文上报任务栈大小。 */
+#define USB2CAN_APP_CAN_REPORT_TASK_STACK_SIZE 2048U
+
+/**
+ * @brief 将一条 CAN 帧封装为 USB 协议并发往主机。
+ *
+ * @param frame 需要上报的一条标准 CAN 帧。
+ */
+static void usb2can_app_send_can_report(const Usb2CanStandardFrame* frame);
 
 /** @brief 保存顶层应用配置。 */
 static Usb2CanAppConfig g_usb2can_app_config;
@@ -32,6 +49,29 @@ static uint8_t g_usb2can_tx_payload_buffer
     [USB2CAN_CONFIG_PROTOCOL_TX_PAYLOAD_BUFFER_SIZE];
 /** @brief 协议发送时复用的整包缓存。 */
 static uint8_t g_usb2can_tx_frame_buffer[USB2CAN_APP_TX_BUFFER_SIZE];
+/** @brief CAN 接收报文上报队列句柄。 */
+static QueueHandle_t g_usb2can_can_report_queue = NULL;
+
+/**
+ * @brief 在任务上下文中把 CAN 报文编码并通过 USB 上报给主机。
+ *
+ * 该任务与 CAN ISR 解耦，参考 cangaroo_hpmicro 的思路，把 USB 发送放到普通任务
+ * 中执行，避免在中断上下文里调用阻塞式 CDC 发送接口。
+ *
+ * @param parameter 未使用。
+ */
+static void usb2can_app_can_report_task(void* parameter) {
+  Usb2CanStandardFrame frame;
+
+  (void)parameter;
+
+  for (;;) {
+    if (xQueueReceive(g_usb2can_can_report_queue, &frame, portMAX_DELAY) ==
+        pdPASS) {
+      usb2can_app_send_can_report(&frame);
+    }
+  }
+}
 
 /**
  * @brief 将内部状态码映射为主机可见错误码。
@@ -142,6 +182,16 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
   }
 
   g_usb2can_app_config = *config;
+  g_usb2can_can_report_queue = xQueueCreate(USB2CAN_APP_CAN_REPORT_QUEUE_LENGTH,
+                                            sizeof(Usb2CanStandardFrame));
+  if (g_usb2can_can_report_queue == NULL) {
+    return kUsb2CanStatusIoError;
+  }
+  if (xTaskCreate(usb2can_app_can_report_task, "usb2can_can_report",
+                  USB2CAN_APP_CAN_REPORT_TASK_STACK_SIZE, NULL,
+                  USB2CAN_APP_CAN_REPORT_TASK_PRIORITY, NULL) != pdPASS) {
+    return kUsb2CanStatusIoError;
+  }
   usb2can_protocol_parser_init(
       &g_usb2can_parser, g_usb2can_parser_frame_buffer,
       sizeof(g_usb2can_parser_frame_buffer), g_usb2can_parser_payload_buffer,
@@ -231,10 +281,15 @@ void usb2can_app_on_usb_rx(const uint8_t* data, size_t length) {
  * @param frame 收到的 CAN 标准帧。
  */
 void usb2can_app_on_can_rx(const Usb2CanStandardFrame* frame) {
+  BaseType_t task_woken = pdFALSE;
+
   if (frame == NULL) {
-    usb2can_app_report_error(kUsb2CanStatusInvalidArgument);
+    return;
+  }
+  if (g_usb2can_can_report_queue == NULL) {
     return;
   }
 
-  usb2can_app_send_can_report(frame);
+  (void)xQueueSendFromISR(g_usb2can_can_report_queue, frame, &task_woken);
+  portYIELD_FROM_ISR(task_woken);
 }

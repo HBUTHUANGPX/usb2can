@@ -52,9 +52,10 @@ static void usb2can_can_convert_rx_message(const mcan_rx_message_t* source,
  */
 SDK_DECLARE_EXT_ISR_M(BOARD_APP_CAN_IRQn, usb2can_can_isr)
 void usb2can_can_isr(void) {
-  const uint32_t flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
+  uint32_t flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
+  uint32_t handled_flags = 0U;
 
-  if ((flags & MCAN_INT_RXFIFO0_NEW_MSG) != 0U) {
+  while ((flags & MCAN_INT_RXFIFO0_NEW_MSG) != 0U) {
     Usb2CanStandardFrame frame;
 
     (void)mcan_read_rxfifo(BOARD_APP_CAN_BASE, 0U,
@@ -64,9 +65,16 @@ void usb2can_can_isr(void) {
     if (g_usb2can_can_rx_callback != NULL) {
       g_usb2can_can_rx_callback(&frame);
     }
+    handled_flags |= MCAN_INT_RXFIFO0_NEW_MSG;
+    flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
   }
 
-  mcan_clear_interrupt_flags(BOARD_APP_CAN_BASE, flags);
+  if (handled_flags != 0U) {
+    mcan_clear_interrupt_flags(BOARD_APP_CAN_BASE, handled_flags);
+  }
+  if ((flags & ~handled_flags) != 0U) {
+    mcan_clear_interrupt_flags(BOARD_APP_CAN_BASE, flags & ~handled_flags);
+  }
 }
 
 /**
