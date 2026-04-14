@@ -63,10 +63,10 @@ void usb2can_can_isr(void) {
   uint32_t flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
   const uint32_t fifo0_flags =
       MCAN_INT_RXFIFO0_NEW_MSG | MCAN_INT_RXFIFO0_FULL |
-      MCAN_INT_RXFIFO0_MSG_LOST;
+      MCAN_INT_RXFIFO0_MSG_LOST | MCAN_INT_RXFIFO0_WMK_REACHED;
   const uint32_t fifo1_flags =
       MCAN_INT_RXFIFO1_NEW_MSG | MCAN_INT_RXFIFO1_FULL |
-      MCAN_INT_RXFIFO1_MSG_LOST;
+      MCAN_INT_RXFIFO1_MSG_LOST | MCAN_INT_RXFIFO1_WMK_REACHED;
   const uint32_t rx_flags = flags & (MCAN_EVENT_RECEIVE | fifo0_flags |
                                      fifo1_flags);
 
@@ -169,8 +169,9 @@ Usb2CanStatus usb2can_can_init(const Usb2CanCanConfig* config,
   mcan_config.baudrate = config->baudrate;
   mcan_config.interrupt_mask =
       MCAN_EVENT_RECEIVE | MCAN_INT_RXFIFO0_FULL |
-      MCAN_INT_RXFIFO0_MSG_LOST | MCAN_INT_RXFIFO1_FULL |
-      MCAN_INT_RXFIFO1_MSG_LOST;
+      MCAN_INT_RXFIFO0_MSG_LOST | MCAN_INT_RXFIFO0_WMK_REACHED |
+      MCAN_INT_RXFIFO1_FULL | MCAN_INT_RXFIFO1_MSG_LOST |
+      MCAN_INT_RXFIFO1_WMK_REACHED;
   mcan_config.txbuf_trans_interrupt_mask = 0U;
   mcan_config.txbuf_cancel_finish_interrupt_mask = 0U;
 
