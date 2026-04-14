@@ -25,7 +25,7 @@
 /** @brief USB 原始输入上报队列深度。 */
 #define USB2CAN_APP_USB_RX_QUEUE_LENGTH 8U
 /** @brief USB 发送消息队列深度。 */
-#define USB2CAN_APP_USB_TX_QUEUE_LENGTH 16U
+#define USB2CAN_APP_USB_TX_QUEUE_LENGTH 64U
 /** @brief USB 原始输入处理任务优先级。 */
 #define USB2CAN_APP_USB_RX_TASK_PRIORITY (configMAX_PRIORITIES - 4U)
 /** @brief USB 发送任务优先级。 */
@@ -109,7 +109,6 @@ static volatile uint32_t g_usb2can_can_rx_enqueue_count = 0U;
  */
 static void usb2can_app_usb_rx_task(void* parameter) {
   Usb2CanUsbRxChunk chunk;
-  uint32_t debug_rx_chunk_count = 0U;
 
   (void)parameter;
 
@@ -118,11 +117,6 @@ static void usb2can_app_usb_rx_task(void* parameter) {
         pdPASS) {
       continue;
     }
-    debug_rx_chunk_count++;
-    printf("[usb2can][usb-rx-task] chunk=%lu len=%u rx_fail=%lu\n",
-           (unsigned long)debug_rx_chunk_count, (unsigned int)chunk.length,
-           (unsigned long)g_usb2can_usb_rx_enqueue_fail_count);
-
     size_t offset = 0U;
 
     while (offset < chunk.length) {
@@ -137,18 +131,13 @@ static void usb2can_app_usb_rx_task(void* parameter) {
 
       offset += consumed_length;
       if (parse_status == kUsb2CanStatusNeedMoreData) {
-        printf("[usb2can][usb-rx-task] parser needs more data offset=%u remaining=%u\n",
-               (unsigned int)offset,
-               (unsigned int)(chunk.length - offset));
         break;
       }
       if (parse_status != kUsb2CanStatusOk) {
-        printf("[usb2can][usb-rx-task] parse error=%d\n", (int)parse_status);
         usb2can_app_report_error(parse_status);
         continue;
       }
       if (packet.head != g_usb2can_app_config.protocol_head) {
-        printf("[usb2can][usb-rx-task] unsupported head=0x%02X\n", packet.head);
         usb2can_app_report_error(kUsb2CanStatusUnsupported);
         continue;
       }
@@ -158,21 +147,14 @@ static void usb2can_app_usb_rx_task(void* parameter) {
             usb2can_bridge_payload_to_can_frame(packet.data, packet.len, &frame);
 
         if (bridge_status != kUsb2CanStatusOk) {
-          printf("[usb2can][usb-rx-task] payload->can failed status=%d\n",
-                 (int)bridge_status);
           usb2can_app_report_error(bridge_status);
           continue;
         }
 
-        printf("[usb2can][usb-rx-task] tx can_id=0x%03X dlc=%u\n", frame.can_id,
-               frame.dlc);
-
         if (usb2can_can_send(&frame) != kUsb2CanStatusOk) {
-          printf("[usb2can][usb-rx-task] can send failed\n");
           usb2can_app_report_error(kUsb2CanStatusIoError);
         }
       } else {
-        printf("[usb2can][usb-rx-task] unsupported cmd=0x%02X\n", packet.cmd);
         usb2can_app_report_error(kUsb2CanStatusUnsupported);
       }
     }
@@ -192,7 +174,6 @@ static void usb2can_app_usb_tx_task(void* parameter) {
   Usb2CanPacket packet;
   size_t payload_length = 0U;
   size_t output_length = 0U;
-  uint32_t debug_tx_count = 0U;
 
   (void)parameter;
 
@@ -201,23 +182,11 @@ static void usb2can_app_usb_tx_task(void* parameter) {
         pdPASS) {
       continue;
     }
-    debug_tx_count++;
-    printf(
-        "[usb2can][usb-tx-task] dequeue=%lu kind=%s can_enq=%lu tx_fail=%lu "
-        "ready=%d\n",
-        (unsigned long)debug_tx_count,
-        message.is_error_report ? "error" : "can",
-        (unsigned long)g_usb2can_can_rx_enqueue_count,
-        (unsigned long)g_usb2can_usb_tx_enqueue_fail_count,
-        usb2can_usb_is_ready() ? 1 : 0);
     if (!usb2can_usb_is_ready()) {
-      printf("[usb2can][usb-tx-task] drop because usb not ready\n");
       continue;
     }
 
     if (message.is_error_report) {
-      printf("[usb2can][usb-tx-task] report error status=%d\n",
-             (int)message.status);
       g_usb2can_tx_payload_buffer[0] =
           (uint8_t)usb2can_app_map_status_to_error_code(message.status);
       packet.head = g_usb2can_app_config.protocol_head;
@@ -226,13 +195,10 @@ static void usb2can_app_usb_tx_task(void* parameter) {
       packet.data = g_usb2can_tx_payload_buffer;
       packet.data_capacity = USB2CAN_APP_TX_BUFFER_SIZE;
     } else {
-      printf("[usb2can][usb-tx-task] send can report can_id=0x%03X dlc=%u\n",
-             message.frame.can_id, message.frame.dlc);
       if (usb2can_bridge_can_frame_to_payload(
               &message.frame, g_usb2can_tx_payload_buffer,
               sizeof(g_usb2can_tx_payload_buffer), &payload_length) !=
           kUsb2CanStatusOk) {
-        printf("[usb2can][usb-tx-task] can->payload failed\n");
         continue;
       }
 
@@ -246,15 +212,13 @@ static void usb2can_app_usb_tx_task(void* parameter) {
     if (usb2can_protocol_encode(&packet, g_usb2can_tx_frame_buffer,
                                 sizeof(g_usb2can_tx_frame_buffer),
                                 &output_length) != kUsb2CanStatusOk) {
-      printf("[usb2can][usb-tx-task] protocol encode failed\n");
       continue;
     }
 
-    {
-      const Usb2CanStatus send_status =
-          usb2can_usb_send(g_usb2can_tx_frame_buffer, output_length);
-      printf("[usb2can][usb-tx-task] usb send len=%u status=%d\n",
-             (unsigned int)output_length, (int)send_status);
+    if (usb2can_usb_send(g_usb2can_tx_frame_buffer, output_length) !=
+        kUsb2CanStatusOk) {
+      printf("[usb2can][usb-tx-task] usb send failed len=%u\n",
+             (unsigned int)output_length);
     }
   }
 }
@@ -302,7 +266,6 @@ static void usb2can_app_report_error(Usb2CanStatus status) {
   if (g_usb2can_usb_tx_queue == NULL) {
     return;
   }
-  printf("[usb2can][app] queue error report status=%d\n", (int)status);
   (void)xQueueSend(g_usb2can_usb_tx_queue, &message, 0U);
 }
 

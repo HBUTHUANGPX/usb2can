@@ -225,9 +225,6 @@ static void usb2can_cdc_event_handler(uint8_t busid, uint8_t event) {
 void usbd_cdc_acm_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes) {
   const uint8_t index = g_usb2can_cdc_read_index;
 
-  printf("[usb2can][cdc] bulk-out ep=0x%02X nbytes=%lu idx=%u\n", ep,
-         (unsigned long)nbytes, index);
-
   g_usb2can_cdc_read_index = (uint8_t)((index == 0U) ? 1U : 0U);
 
   if (g_usb2can_cdc_rx_callback != NULL && nbytes > 0U) {
@@ -248,14 +245,10 @@ void usbd_cdc_acm_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes) {
  */
 void usbd_cdc_acm_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes) {
   if ((nbytes % usbd_get_ep_mps(busid, ep)) == 0U && nbytes > 0U) {
-    printf("[usb2can][cdc] bulk-in zlp ep=0x%02X nbytes=%lu\n", ep,
-           (unsigned long)nbytes);
     usbd_ep_start_write(busid, ep, NULL, 0U);
     return;
   }
 
-  printf("[usb2can][cdc] bulk-in done ep=0x%02X nbytes=%lu\n", ep,
-         (unsigned long)nbytes);
   g_usb2can_cdc_tx_busy = false;
   if (g_usb2can_cdc_tx_done != NULL) {
     BaseType_t x_higher_priority_task_woken = pdFALSE;
@@ -337,7 +330,6 @@ Usb2CanStatus usb2can_cdc_acm_send(const uint8_t* data, size_t length) {
   }
 
   while (g_usb2can_cdc_tx_busy) {
-    printf("[usb2can][cdc] wait tx done len=%u\n", (unsigned int)length);
     if (xSemaphoreTake(g_usb2can_cdc_tx_done, portMAX_DELAY) != pdTRUE) {
       return kUsb2CanStatusIoError;
     }
@@ -347,7 +339,6 @@ Usb2CanStatus usb2can_cdc_acm_send(const uint8_t* data, size_t length) {
   while (xSemaphoreTake(g_usb2can_cdc_tx_done, 0U) == pdTRUE) {
   }
   g_usb2can_cdc_tx_busy = true;
-  printf("[usb2can][cdc] start write len=%u\n", (unsigned int)length);
   if (usbd_ep_start_write(USB2CAN_CONFIG_USB_BUS_ID, USB2CAN_CDC_IN_EP,
                           g_usb2can_cdc_write_buffer,
                           (uint32_t)length) != 0) {
@@ -365,8 +356,6 @@ Usb2CanStatus usb2can_cdc_acm_send(const uint8_t* data, size_t length) {
            (unsigned int)length);
     return kUsb2CanStatusIoError;
   }
-
-  printf("[usb2can][cdc] send ok len=%u\n", (unsigned int)length);
 
   return kUsb2CanStatusOk;
 }
@@ -390,7 +379,6 @@ bool usb2can_cdc_acm_is_ready(void) {
 void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr) {
   (void)busid;
   (void)intf;
-  printf("[usb2can][cdc] set dtr=%d\n", dtr ? 1 : 0);
   g_usb2can_cdc_dtr = dtr;
   g_usb2can_cdc_ready = dtr;
   if (!dtr) {

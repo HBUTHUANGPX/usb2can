@@ -25,8 +25,6 @@ ATTR_PLACE_AT(".ahb_sram") static uint32_t g_usb2can_can_msg_buffer
 
 /** @brief 最近收到的一条 MCAN 原始消息。 */
 static volatile mcan_rx_message_t g_usb2can_last_rx_message;
-/** @brief CAN 调试打印计数。 */
-static volatile uint32_t g_usb2can_can_debug_print_count = 0U;
 
 /**
  * @brief 将 MCAN 驱动消息对象翻译为项目内部标准 CAN 帧。
@@ -69,16 +67,6 @@ void usb2can_can_isr(void) {
       }
       usb2can_can_convert_rx_message(
           (const mcan_rx_message_t*)&g_usb2can_last_rx_message, &frame);
-      g_usb2can_can_debug_print_count++;
-      if (g_usb2can_can_debug_print_count <= 10U ||
-          (g_usb2can_can_debug_print_count % 32U) == 0U) {
-        printf(
-            "[usb2can][can-isr] fifo0 rx_count=%lu fill=%lu flags=0x%08lX "
-            "can_id=0x%03X dlc=%u\n",
-            (unsigned long)g_usb2can_can_debug_print_count,
-            (unsigned long)MCAN_RXF0S_F0FL_GET(BOARD_APP_CAN_BASE->RXF0S),
-            (unsigned long)flags, frame.can_id, frame.dlc);
-      }
       if (g_usb2can_can_rx_callback != NULL) {
         g_usb2can_can_rx_callback(&frame);
       } else {
@@ -88,19 +76,12 @@ void usb2can_can_isr(void) {
   }
 
   if ((flags & MCAN_INT_RXFIFO1_NEW_MSG) != 0U) {
-    printf("[usb2can][can-isr] rx fifo1 new message flag set flags=0x%08lX\n",
-           (unsigned long)flags);
     while (MCAN_RXF1S_F1FL_GET(BOARD_APP_CAN_BASE->RXF1S) > 0U) {
       if (mcan_read_rxfifo(BOARD_APP_CAN_BASE, 1U,
                            (mcan_rx_message_t*)&g_usb2can_last_rx_message) !=
           status_success) {
         printf("[usb2can][can-isr] read rxfifo1 failed\n");
         break;
-      }
-      if (g_usb2can_can_debug_print_count <= 10U ||
-          (g_usb2can_can_debug_print_count % 32U) == 0U) {
-        printf("[usb2can][can-isr] drained fifo1 fill=%lu\n",
-               (unsigned long)MCAN_RXF1S_F1FL_GET(BOARD_APP_CAN_BASE->RXF1S));
       }
     }
   }
@@ -189,8 +170,6 @@ Usb2CanStatus usb2can_can_send(const Usb2CanStandardFrame* frame) {
   tx_frame.bitrate_switch = 0U;
   tx_frame.dlc = frame->dlc;
   memcpy(tx_frame.data_8, frame->payload, frame->dlc);
-
-  printf("[usb2can][can] tx can_id=0x%03X dlc=%u\n", frame->can_id, frame->dlc);
 
   if (mcan_transmit_blocking(BOARD_APP_CAN_BASE, &tx_frame) != status_success) {
     printf("[usb2can][can] mcan_transmit_blocking failed\n");
