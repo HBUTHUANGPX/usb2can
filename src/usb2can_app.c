@@ -22,10 +22,16 @@
 #define USB2CAN_APP_TX_BUFFER_SIZE USB2CAN_CONFIG_PROTOCOL_TX_FRAME_BUFFER_SIZE
 /** @brief 错误上报负载大小。 */
 #define USB2CAN_APP_ERROR_PAYLOAD_SIZE 1U
+/** @brief USB 原始输入上报队列深度。 */
+#define USB2CAN_APP_USB_RX_QUEUE_LENGTH 8U
 /** @brief CAN 接收报文上报队列深度。 */
 #define USB2CAN_APP_CAN_REPORT_QUEUE_LENGTH 16U
+/** @brief USB 原始输入处理任务优先级。 */
+#define USB2CAN_APP_USB_RX_TASK_PRIORITY (configMAX_PRIORITIES - 4U)
 /** @brief CAN 接收报文上报任务优先级。 */
 #define USB2CAN_APP_CAN_REPORT_TASK_PRIORITY (configMAX_PRIORITIES - 5U)
+/** @brief USB 原始输入处理任务栈大小。 */
+#define USB2CAN_APP_USB_RX_TASK_STACK_SIZE (configMINIMAL_STACK_SIZE + 256U)
 /** @brief CAN 接收报文上报任务栈大小。 */
 #define USB2CAN_APP_CAN_REPORT_TASK_STACK_SIZE (configMINIMAL_STACK_SIZE + 256U)
 
@@ -35,6 +41,23 @@
  * @param frame 需要上报的一条标准 CAN 帧。
  */
 static void usb2can_app_send_can_report(const Usb2CanStandardFrame* frame);
+
+/**
+ * @brief 发送一条单字节错误上报。
+ *
+ * @param status 需要上报给主机的错误码。
+ */
+static void usb2can_app_report_error(Usb2CanStatus status);
+
+/**
+ * @brief 描述一段待在任务上下文中处理的 USB 原始输入。
+ */
+typedef struct Usb2CanUsbRxChunk {
+  /** @brief 当前分片的有效字节数。 */
+  size_t length;
+  /** @brief 当前分片的原始字节数据。 */
+  uint8_t data[USB2CAN_CONFIG_CDC_RX_BUFFER_SIZE];
+} Usb2CanUsbRxChunk;
 
 /** @brief 保存顶层应用配置。 */
 static Usb2CanAppConfig g_usb2can_app_config;
@@ -49,8 +72,73 @@ static uint8_t g_usb2can_tx_payload_buffer
     [USB2CAN_CONFIG_PROTOCOL_TX_PAYLOAD_BUFFER_SIZE];
 /** @brief 协议发送时复用的整包缓存。 */
 static uint8_t g_usb2can_tx_frame_buffer[USB2CAN_APP_TX_BUFFER_SIZE];
+/** @brief USB 原始输入队列句柄。 */
+static QueueHandle_t g_usb2can_usb_rx_queue = NULL;
 /** @brief CAN 接收报文上报队列句柄。 */
 static QueueHandle_t g_usb2can_can_report_queue = NULL;
+
+/**
+ * @brief 在任务上下文中处理从 USB 收到的原始字节流。
+ *
+ * 参考 cangaroo_hpmicro 的处理方式，USB 回调只做最小搬运，真正的协议解析与
+ * CAN 发送放到普通任务中，避免在 USB 回调上下文里执行阻塞式 CAN 发送。
+ *
+ * @param parameter 未使用。
+ */
+static void usb2can_app_usb_rx_task(void* parameter) {
+  Usb2CanUsbRxChunk chunk;
+
+  (void)parameter;
+
+  for (;;) {
+    if (xQueueReceive(g_usb2can_usb_rx_queue, &chunk, portMAX_DELAY) !=
+        pdPASS) {
+      continue;
+    }
+
+    size_t offset = 0U;
+
+    while (offset < chunk.length) {
+      Usb2CanPacket packet = {
+          .data = g_usb2can_parser_payload_buffer,
+          .data_capacity = sizeof(g_usb2can_parser_payload_buffer),
+      };
+      size_t consumed_length = 0U;
+      const Usb2CanStatus parse_status = usb2can_protocol_parser_push(
+          &g_usb2can_parser, &chunk.data[offset], chunk.length - offset, &packet,
+          &consumed_length);
+
+      offset += consumed_length;
+      if (parse_status == kUsb2CanStatusNeedMoreData) {
+        break;
+      }
+      if (parse_status != kUsb2CanStatusOk) {
+        usb2can_app_report_error(parse_status);
+        continue;
+      }
+      if (packet.head != g_usb2can_app_config.protocol_head) {
+        usb2can_app_report_error(kUsb2CanStatusUnsupported);
+        continue;
+      }
+      if (packet.cmd == kUsb2CanCommandCanTx) {
+        Usb2CanStandardFrame frame;
+        const Usb2CanStatus bridge_status =
+            usb2can_bridge_payload_to_can_frame(packet.data, packet.len, &frame);
+
+        if (bridge_status != kUsb2CanStatusOk) {
+          usb2can_app_report_error(bridge_status);
+          continue;
+        }
+
+        if (usb2can_can_send(&frame) != kUsb2CanStatusOk) {
+          usb2can_app_report_error(kUsb2CanStatusIoError);
+        }
+      } else {
+        usb2can_app_report_error(kUsb2CanStatusUnsupported);
+      }
+    }
+  }
+}
 
 /**
  * @brief 在任务上下文中把 CAN 报文编码并通过 USB 上报给主机。
@@ -182,10 +270,22 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
   }
 
   g_usb2can_app_config = *config;
+  g_usb2can_usb_rx_queue = xQueueCreate(USB2CAN_APP_USB_RX_QUEUE_LENGTH,
+                                        sizeof(Usb2CanUsbRxChunk));
+  if (g_usb2can_usb_rx_queue == NULL) {
+    printf("usb2can usb rx queue create failed.\n");
+    return kUsb2CanStatusIoError;
+  }
   g_usb2can_can_report_queue = xQueueCreate(USB2CAN_APP_CAN_REPORT_QUEUE_LENGTH,
                                             sizeof(Usb2CanStandardFrame));
   if (g_usb2can_can_report_queue == NULL) {
     printf("usb2can can report queue create failed.\n");
+    return kUsb2CanStatusIoError;
+  }
+  if (xTaskCreate(usb2can_app_usb_rx_task, "usb2can_usb_rx",
+                  USB2CAN_APP_USB_RX_TASK_STACK_SIZE, NULL,
+                  USB2CAN_APP_USB_RX_TASK_PRIORITY, NULL) != pdPASS) {
+    printf("usb2can usb rx task create failed.\n");
     return kUsb2CanStatusIoError;
   }
   if (xTaskCreate(usb2can_app_can_report_task, "usb2can_can_report",
@@ -236,47 +336,20 @@ Usb2CanAppConfig usb2can_app_get_default_config(void) {
  * @param length 输入长度。
  */
 void usb2can_app_on_usb_rx(const uint8_t* data, size_t length) {
-  size_t offset = 0U;
+  BaseType_t task_woken = pdFALSE;
+  Usb2CanUsbRxChunk chunk;
 
-  while (offset < length) {
-    Usb2CanPacket packet = {
-        .data = g_usb2can_parser_payload_buffer,
-        .data_capacity = sizeof(g_usb2can_parser_payload_buffer),
-    };
-    size_t consumed_length = 0U;
-    const Usb2CanStatus parse_status = usb2can_protocol_parser_push(
-        &g_usb2can_parser, &data[offset], length - offset, &packet,
-        &consumed_length);
-
-    offset += consumed_length;
-    if (parse_status == kUsb2CanStatusNeedMoreData) {
-      break;
-    }
-    if (parse_status != kUsb2CanStatusOk) {
-      usb2can_app_report_error(parse_status);
-      continue;
-    }
-    if (packet.head != g_usb2can_app_config.protocol_head) {
-      usb2can_app_report_error(kUsb2CanStatusUnsupported);
-      continue;
-    }
-    if (packet.cmd == kUsb2CanCommandCanTx) {
-      Usb2CanStandardFrame frame;
-      const Usb2CanStatus bridge_status = usb2can_bridge_payload_to_can_frame(
-          packet.data, packet.len, &frame);
-
-      if (bridge_status != kUsb2CanStatusOk) {
-        usb2can_app_report_error(bridge_status);
-        continue;
-      }
-
-      if (usb2can_can_send(&frame) != kUsb2CanStatusOk) {
-        usb2can_app_report_error(kUsb2CanStatusIoError);
-      }
-    } else {
-      usb2can_app_report_error(kUsb2CanStatusUnsupported);
-    }
+  if (data == NULL || length == 0U || g_usb2can_usb_rx_queue == NULL) {
+    return;
   }
+  if (length > sizeof(chunk.data)) {
+    return;
+  }
+
+  chunk.length = length;
+  memcpy(chunk.data, data, length);
+  (void)xQueueSendFromISR(g_usb2can_usb_rx_queue, &chunk, &task_woken);
+  portYIELD_FROM_ISR(task_woken);
 }
 
 /**
