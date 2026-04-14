@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -57,6 +58,10 @@ def crc16(data: bytes) -> int:
 
 def format_hex(data: Iterable[int]) -> str:
     return " ".join(f"{value:02X}" for value in data)
+
+
+def format_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
 def parse_protocol_frame(raw_frame: bytes) -> dict:
@@ -227,14 +232,21 @@ def main(argv: list[str] | None = None) -> int:
                     try:
                         decoded = decode_packet(packet)
                     except ValueError as exc:
-                        print(f"decode error: {exc} raw={format_hex(packet['raw_frame'])}", file=sys.stderr)
+                        print(
+                            f"{format_timestamp()} decode error: {exc} "
+                            f"raw={format_hex(packet['raw_frame'])}",
+                            file=sys.stderr,
+                        )
                         continue
-                    print(format_decoded_message(decoded), flush=True)
+                    print(
+                        f"{format_timestamp()} {format_decoded_message(decoded)}",
+                        flush=True,
+                    )
     except KeyboardInterrupt:
         print("\nstopped")
         return 0
     except serial.SerialException as exc:
-        print(f"serial open/read failed: {exc}", file=sys.stderr)
+        print(f"{format_timestamp()} serial open/read failed: {exc}", file=sys.stderr)
         return 1
 
 

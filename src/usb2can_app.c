@@ -26,6 +26,8 @@
 #define USB2CAN_APP_USB_RX_QUEUE_LENGTH 8U
 /** @brief USB 发送消息队列深度。 */
 #define USB2CAN_APP_USB_TX_QUEUE_LENGTH 64U
+/** @brief CAN 接收软件环形缓冲区深度。 */
+#define USB2CAN_APP_CAN_RX_RING_LENGTH 128U
 /** @brief USB 原始输入处理任务优先级。 */
 #define USB2CAN_APP_USB_RX_TASK_PRIORITY (configMAX_PRIORITIES - 4U)
 /** @brief USB 发送任务优先级。 */
@@ -75,6 +77,22 @@ typedef struct Usb2CanUsbTxMessage {
   };
 } Usb2CanUsbTxMessage;
 
+/**
+ * @brief 描述 ISR 与 USB 发送任务之间共享的 CAN RX 环形缓冲区。
+ */
+typedef struct Usb2CanCanRxRingBuffer {
+  /** @brief 环形缓冲区中的标准 CAN 帧槽位。 */
+  Usb2CanStandardFrame frames[USB2CAN_APP_CAN_RX_RING_LENGTH];
+  /** @brief 下一次写入位置。 */
+  uint32_t write_index;
+  /** @brief 下一次读取位置。 */
+  uint32_t read_index;
+  /** @brief 当前已缓存的帧数。 */
+  uint32_t count;
+  /** @brief 环形缓冲区溢出计数。 */
+  uint32_t overflow_count;
+} Usb2CanCanRxRingBuffer;
+
 /** @brief 保存顶层应用配置。 */
 static Usb2CanAppConfig g_usb2can_app_config;
 /** @brief 保存协议解析器实例。 */
@@ -92,12 +110,68 @@ static uint8_t g_usb2can_tx_frame_buffer[USB2CAN_APP_TX_BUFFER_SIZE];
 static QueueHandle_t g_usb2can_usb_rx_queue = NULL;
 /** @brief USB 发送消息队列句柄。 */
 static QueueHandle_t g_usb2can_usb_tx_queue = NULL;
-/** @brief USB 原始输入 ISR 入队失败计数。 */
-static volatile uint32_t g_usb2can_usb_rx_enqueue_fail_count = 0U;
-/** @brief CAN 上报 ISR 入队失败计数。 */
-static volatile uint32_t g_usb2can_usb_tx_enqueue_fail_count = 0U;
-/** @brief CAN 上报成功入队计数。 */
-static volatile uint32_t g_usb2can_can_rx_enqueue_count = 0U;
+/** @brief CAN RX 软件环形缓冲区。 */
+static Usb2CanCanRxRingBuffer g_usb2can_can_rx_ring = {0};
+/** @brief USB 发送任务句柄。 */
+static TaskHandle_t g_usb2can_usb_tx_task_handle = NULL;
+
+/**
+ * @brief 从 ISR 向 CAN RX 环形缓冲区压入一帧。
+ *
+ * @param frame 待缓存的标准 CAN 帧。
+ * @return `true` 表示写入成功，`false` 表示环形缓冲区已满。
+ */
+static bool usb2can_app_can_rx_ring_push_from_isr(
+    const Usb2CanStandardFrame* frame) {
+  bool pushed = false;
+  UBaseType_t saved_interrupt_status;
+
+  if (frame == NULL) {
+    return false;
+  }
+
+  saved_interrupt_status = taskENTER_CRITICAL_FROM_ISR();
+  if (g_usb2can_can_rx_ring.count < USB2CAN_APP_CAN_RX_RING_LENGTH) {
+    g_usb2can_can_rx_ring.frames[g_usb2can_can_rx_ring.write_index] = *frame;
+    g_usb2can_can_rx_ring.write_index =
+        (g_usb2can_can_rx_ring.write_index + 1U) %
+        USB2CAN_APP_CAN_RX_RING_LENGTH;
+    g_usb2can_can_rx_ring.count++;
+    pushed = true;
+  } else {
+    g_usb2can_can_rx_ring.overflow_count++;
+  }
+  taskEXIT_CRITICAL_FROM_ISR(saved_interrupt_status);
+
+  return pushed;
+}
+
+/**
+ * @brief 在任务上下文中从 CAN RX 环形缓冲区弹出一帧。
+ *
+ * @param frame 输出的一条标准 CAN 帧。
+ * @return `true` 表示成功读到一帧，`false` 表示当前为空。
+ */
+static bool usb2can_app_can_rx_ring_pop(Usb2CanStandardFrame* frame) {
+  bool popped = false;
+
+  if (frame == NULL) {
+    return false;
+  }
+
+  taskENTER_CRITICAL();
+  if (g_usb2can_can_rx_ring.count > 0U) {
+    *frame = g_usb2can_can_rx_ring.frames[g_usb2can_can_rx_ring.read_index];
+    g_usb2can_can_rx_ring.read_index =
+        (g_usb2can_can_rx_ring.read_index + 1U) %
+        USB2CAN_APP_CAN_RX_RING_LENGTH;
+    g_usb2can_can_rx_ring.count--;
+    popped = true;
+  }
+  taskEXIT_CRITICAL();
+
+  return popped;
+}
 
 /**
  * @brief 在任务上下文中处理从 USB 收到的原始字节流。
@@ -171,22 +245,24 @@ static void usb2can_app_usb_rx_task(void* parameter) {
  */
 static void usb2can_app_usb_tx_task(void* parameter) {
   Usb2CanUsbTxMessage message;
+  Usb2CanStandardFrame frame;
   Usb2CanPacket packet;
   size_t payload_length = 0U;
   size_t output_length = 0U;
+  uint32_t last_overflow_count = 0U;
+  bool did_work = false;
 
   (void)parameter;
 
   for (;;) {
-    if (xQueueReceive(g_usb2can_usb_tx_queue, &message, portMAX_DELAY) !=
-        pdPASS) {
-      continue;
-    }
-    if (!usb2can_usb_is_ready()) {
-      continue;
-    }
+    did_work = false;
 
-    if (message.is_error_report) {
+    while (xQueueReceive(g_usb2can_usb_tx_queue, &message, 0U) == pdPASS) {
+      did_work = true;
+      if (!usb2can_usb_is_ready()) {
+        continue;
+      }
+
       g_usb2can_tx_payload_buffer[0] =
           (uint8_t)usb2can_app_map_status_to_error_code(message.status);
       packet.head = g_usb2can_app_config.protocol_head;
@@ -194,9 +270,27 @@ static void usb2can_app_usb_tx_task(void* parameter) {
       packet.len = USB2CAN_APP_ERROR_PAYLOAD_SIZE;
       packet.data = g_usb2can_tx_payload_buffer;
       packet.data_capacity = USB2CAN_APP_TX_BUFFER_SIZE;
-    } else {
+
+      if (usb2can_protocol_encode(&packet, g_usb2can_tx_frame_buffer,
+                                  sizeof(g_usb2can_tx_frame_buffer),
+                                  &output_length) != kUsb2CanStatusOk) {
+        continue;
+      }
+
+      if (usb2can_usb_send(g_usb2can_tx_frame_buffer, output_length) !=
+          kUsb2CanStatusOk) {
+        printf("[usb2can][usb-tx-task] usb send failed len=%u\n",
+               (unsigned int)output_length);
+      }
+    }
+
+    while (usb2can_app_can_rx_ring_pop(&frame)) {
+      did_work = true;
+      if (!usb2can_usb_is_ready()) {
+        continue;
+      }
       if (usb2can_bridge_can_frame_to_payload(
-              &message.frame, g_usb2can_tx_payload_buffer,
+              &frame, g_usb2can_tx_payload_buffer,
               sizeof(g_usb2can_tx_payload_buffer), &payload_length) !=
           kUsb2CanStatusOk) {
         continue;
@@ -207,18 +301,28 @@ static void usb2can_app_usb_tx_task(void* parameter) {
       packet.len = (uint16_t)payload_length;
       packet.data = g_usb2can_tx_payload_buffer;
       packet.data_capacity = USB2CAN_APP_TX_BUFFER_SIZE;
+
+      if (usb2can_protocol_encode(&packet, g_usb2can_tx_frame_buffer,
+                                  sizeof(g_usb2can_tx_frame_buffer),
+                                  &output_length) != kUsb2CanStatusOk) {
+        continue;
+      }
+
+      if (usb2can_usb_send(g_usb2can_tx_frame_buffer, output_length) !=
+          kUsb2CanStatusOk) {
+        printf("[usb2can][usb-tx-task] usb send failed len=%u\n",
+               (unsigned int)output_length);
+      }
     }
 
-    if (usb2can_protocol_encode(&packet, g_usb2can_tx_frame_buffer,
-                                sizeof(g_usb2can_tx_frame_buffer),
-                                &output_length) != kUsb2CanStatusOk) {
-      continue;
+    if (g_usb2can_can_rx_ring.overflow_count != last_overflow_count) {
+      last_overflow_count = g_usb2can_can_rx_ring.overflow_count;
+      printf("[usb2can][usb-tx-task] can rx ring overflow count=%lu\n",
+             (unsigned long)last_overflow_count);
     }
 
-    if (usb2can_usb_send(g_usb2can_tx_frame_buffer, output_length) !=
-        kUsb2CanStatusOk) {
-      printf("[usb2can][usb-tx-task] usb send failed len=%u\n",
-             (unsigned int)output_length);
+    if (!did_work) {
+      (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     }
   }
 }
@@ -267,6 +371,9 @@ static void usb2can_app_report_error(Usb2CanStatus status) {
     return;
   }
   (void)xQueueSend(g_usb2can_usb_tx_queue, &message, 0U);
+  if (g_usb2can_usb_tx_task_handle != NULL) {
+    xTaskNotifyGive(g_usb2can_usb_tx_task_handle);
+  }
 }
 
 /**
@@ -303,7 +410,8 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
   }
   if (xTaskCreate(usb2can_app_usb_tx_task, "usb2can_usb_tx",
                   USB2CAN_APP_USB_TX_TASK_STACK_SIZE, NULL,
-                  USB2CAN_APP_USB_TX_TASK_PRIORITY, NULL) != pdPASS) {
+                  USB2CAN_APP_USB_TX_TASK_PRIORITY,
+                  &g_usb2can_usb_tx_task_handle) != pdPASS) {
     printf("usb2can usb tx task create failed.\n");
     return kUsb2CanStatusIoError;
   }
@@ -364,10 +472,7 @@ void usb2can_app_on_usb_rx(const uint8_t* data, size_t length) {
 
   chunk.length = length;
   memcpy(chunk.data, data, length);
-  if (xQueueSendFromISR(g_usb2can_usb_rx_queue, &chunk, &task_woken) !=
-      pdPASS) {
-    g_usb2can_usb_rx_enqueue_fail_count++;
-  }
+  (void)xQueueSendFromISR(g_usb2can_usb_rx_queue, &chunk, &task_woken);
   portYIELD_FROM_ISR(task_woken);
 }
 
@@ -378,22 +483,16 @@ void usb2can_app_on_usb_rx(const uint8_t* data, size_t length) {
  */
 void usb2can_app_on_can_rx(const Usb2CanStandardFrame* frame) {
   BaseType_t task_woken = pdFALSE;
-  Usb2CanUsbTxMessage message;
 
   if (frame == NULL) {
     return;
   }
-  if (g_usb2can_usb_tx_queue == NULL) {
+  if (g_usb2can_usb_tx_task_handle == NULL) {
     return;
   }
 
-  message.is_error_report = false;
-  message.frame = *frame;
-  if (xQueueSendFromISR(g_usb2can_usb_tx_queue, &message, &task_woken) ==
-      pdPASS) {
-    g_usb2can_can_rx_enqueue_count++;
-  } else {
-    g_usb2can_usb_tx_enqueue_fail_count++;
+  if (usb2can_app_can_rx_ring_push_from_isr(frame)) {
+    vTaskNotifyGiveFromISR(g_usb2can_usb_tx_task_handle, &task_woken);
   }
   portYIELD_FROM_ISR(task_woken);
 }
