@@ -61,7 +61,7 @@ def format_hex(data: Iterable[int]) -> str:
 
 
 def format_timestamp() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
 def parse_protocol_frame(raw_frame: bytes) -> dict:
@@ -195,13 +195,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=0.2,
+        default=0,
         help="Serial read timeout in seconds.",
     )
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=64,
+        default=1024,
         help="Max bytes to read per serial read call.",
     )
     return parser.parse_args(argv)
