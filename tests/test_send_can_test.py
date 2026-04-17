@@ -124,6 +124,11 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual(args.query, "get-mode")
         self.assertTrue(args.read_response)
 
+    def test_parse_args_accepts_set_mode_only(self):
+        args = send_can_test.parse_args(["--mode", "canfd", "--set-mode-only"])
+
+        self.assertTrue(args.set_mode_only)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -164,6 +164,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Read and print device responses after sending control/data frames.",
     )
+    parser.add_argument(
+        "--set-mode-only",
+        action="store_true",
+        help="Send SET_MODE and exit without transmitting CAN data.",
+    )
     args = parser.parse_args(argv)
     if args.count < 0:
         parser.error("--count must be >= 0")
@@ -173,6 +178,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--pack-count requires --count > 0")
     if args.query is not None and args.pack_count:
         parser.error("--query cannot be used with --pack-count")
+    if args.query is not None and args.set_mode_only:
+        parser.error("--query cannot be used with --set-mode-only")
     if args.mode == "can2" and len(parse_data_bytes(args.data)) > 8:
         parser.error("CAN2 mode payload supports at most 8 bytes")
     if args.mode != "can2" and len(parse_data_bytes(args.data)) not in CANFD_VALID_LENGTHS:
@@ -243,6 +250,8 @@ def main(argv: list[str] | None = None) -> int:
             ser.write(mode_frame)
             ser.flush()
             read_responses("mode_rsp")
+            if args.set_mode_only:
+                return 0
             if args.query is not None:
                 ser.write(query_frame)
                 ser.flush()
