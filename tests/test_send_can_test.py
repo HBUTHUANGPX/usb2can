@@ -31,6 +31,16 @@ class BuildPacketTest(unittest.TestCase):
 
         self.assertEqual(frame, bytes([0xA5, 0x12, 0x01, 0x00, 0x1F, 0xD1, 0xF1, 0x01]))
 
+    def test_build_get_mode_frame_matches_expected_bytes(self):
+        frame = send_can_test.build_get_mode_frame()
+
+        self.assertEqual(frame, bytes([0xA5, 0x10, 0x00, 0x00, 0x67, 0xFF, 0xFF]))
+
+    def test_build_get_capability_frame_matches_expected_bytes(self):
+        frame = send_can_test.build_get_capability_frame()
+
+        self.assertEqual(frame, bytes([0xA5, 0x14, 0x00, 0x00, 0x4E, 0xFF, 0xFF]))
+
     def test_build_canfd_protocol_frame_matches_expected_bytes(self):
         payload = bytes(range(12))
 
@@ -107,6 +117,12 @@ class ParseArgsTest(unittest.TestCase):
         args = send_can_test.parse_args(["--mode", "canfd-brs", "--data", "00 01 02 03 04 05 06 07 08 09 0A 0B"])
 
         self.assertEqual(args.mode, "canfd-brs")
+
+    def test_parse_args_accepts_query_mode(self):
+        args = send_can_test.parse_args(["--query", "get-mode", "--read-response"])
+
+        self.assertEqual(args.query, "get-mode")
+        self.assertTrue(args.read_response)
 
 
 if __name__ == "__main__":

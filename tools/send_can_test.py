@@ -11,6 +11,8 @@ from typing import Iterable
 PROTOCOL_HEAD = 0xA5
 CMD_CAN_TX = 0x01
 CMD_CANFD_TX = 0x03
+CMD_GET_MODE = 0x10
+CMD_GET_CAPABILITY = 0x14
 CMD_SET_MODE = 0x12
 DEFAULT_PORT = "/dev/ttyACM0"
 DEFAULT_CAN_ID = 0x123
@@ -98,6 +100,14 @@ def build_set_mode_frame(mode_id: int) -> bytes:
     return build_raw_protocol_frame(CMD_SET_MODE, bytes([mode_id]))
 
 
+def build_get_mode_frame() -> bytes:
+    return build_raw_protocol_frame(CMD_GET_MODE, b"")
+
+
+def build_get_capability_frame() -> bytes:
+    return build_raw_protocol_frame(CMD_GET_CAPABILITY, b"")
+
+
 def build_canfd_protocol_frame(can_id: int, payload: bytes) -> bytes:
     if len(payload) not in CANFD_VALID_LENGTHS:
         raise ValueError("CAN FD payload length must be one of 0..8,12,16,20,24,32,48,64")
@@ -144,6 +154,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="When count > 0, pack count protocol frames into one CDC write.",
     )
+    parser.add_argument(
+        "--query",
+        choices=["get-mode", "get-capability"],
+        help="Send a control-plane query instead of CAN data.",
+    )
+    parser.add_argument(
+        "--read-response",
+        action="store_true",
+        help="Read and print device responses after sending control/data frames.",
+    )
     args = parser.parse_args(argv)
     if args.count < 0:
         parser.error("--count must be >= 0")
@@ -151,6 +171,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--interval must be >= 0")
     if args.pack_count and args.count == 0:
         parser.error("--pack-count requires --count > 0")
+    if args.query is not None and args.pack_count:
+        parser.error("--query cannot be used with --pack-count")
     if args.mode == "can2" and len(parse_data_bytes(args.data)) > 8:
         parser.error("CAN2 mode payload supports at most 8 bytes")
     if args.mode != "can2" and len(parse_data_bytes(args.data)) not in CANFD_VALID_LENGTHS:
@@ -171,29 +193,66 @@ def main(argv: list[str] | None = None) -> int:
     mode_id = MODE_NAME_TO_ID[args.mode]
     mode_frame = build_set_mode_frame(mode_id)
     frame = build_protocol_frame(can_id, payload) if args.mode == "can2" else build_canfd_protocol_frame(can_id, payload)
+    query_frame = None
+    if args.query == "get-mode":
+        query_frame = build_get_mode_frame()
+    elif args.query == "get-capability":
+        query_frame = build_get_capability_frame()
 
     print(f"port: {args.port}")
     print(f"can_id: 0x{can_id:03X}")
     print(f"mode_select[{len(mode_frame)}]: {format_hex(mode_frame)}")
-    print(f"payload[{len(payload)}]: {format_hex(payload)}")
-    print(f"usb_frame[{len(frame)}]: {format_hex(frame)}")
-    print(f"active_mode: {args.mode}")
-    if args.count == 0:
-        print("mode: continuous")
-    elif args.pack_count:
-        print(f"mode: finite batched ({args.count} frames in one write)")
+    if args.query is not None:
+        print(f"query_frame[{len(query_frame)}]: {format_hex(query_frame)}")
+        print(f"query: {args.query}")
     else:
-        print(f"mode: finite ({args.count} frames)")
+        print(f"payload[{len(payload)}]: {format_hex(payload)}")
+        print(f"usb_frame[{len(frame)}]: {format_hex(frame)}")
+        print(f"active_mode: {args.mode}")
+        if args.count == 0:
+            print("mode: continuous")
+        elif args.pack_count:
+            print(f"mode: finite batched ({args.count} frames in one write)")
+        else:
+            print(f"mode: finite ({args.count} frames)")
 
     try:
         with serial.Serial(args.port, baudrate=args.baudrate, timeout=1) as ser:
+            parser = None
+            if args.read_response:
+                import recv_can_test
+
+                parser = recv_can_test.ProtocolStreamParser()
+
+            def read_responses(expected_label: str) -> None:
+                if parser is None:
+                    return
+                deadline = time.time() + 1.0
+                while time.time() < deadline:
+                    chunk = ser.read(1024)
+                    if not chunk:
+                        continue
+                    packets = parser.push(chunk)
+                    for packet in packets:
+                        decoded = recv_can_test.decode_packet(packet)
+                        print(f"{expected_label}: {recv_can_test.format_decoded_message(decoded)}")
+                    if packets:
+                        return
+
             index = 0
             ser.write(mode_frame)
             ser.flush()
+            read_responses("mode_rsp")
+            if args.query is not None:
+                ser.write(query_frame)
+                ser.flush()
+                read_responses("query_rsp")
+                return 0
             if args.pack_count:
                 batched_frames = build_batched_frames(frame, args.count)
                 written = ser.write(batched_frames)
                 ser.flush()
+                read_responses("data_rsp")
                 index = args.count
                 print(f"sent one batch with {args.count} frames, wrote {written} bytes")
                 return 0
@@ -201,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
             while args.count == 0 or index < args.count:
                 written = ser.write(frame)
                 ser.flush()
+                read_responses("data_rsp")
                 index += 1
                 if args.count == 0:
                     print(f"sent {index}, wrote {written} bytes")
