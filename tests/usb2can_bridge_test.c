@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "usb2can_bridge.h"
 
@@ -74,9 +75,75 @@ static void test_canfd_length_mapping_rejects_non_canonical_sizes(void) {
               "非法 DLC 应被拒绝");
 }
 
+static void test_canfd_payload_round_trip(void) {
+  Usb2CanFdStandardFrame input_frame = {
+      .can_id = 0x0123U,
+      .data_length = 12U,
+      .payload = {0x00U, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U,
+                  0x06U, 0x07U, 0x08U, 0x09U, 0x0AU, 0x0BU},
+  };
+  Usb2CanFdStandardFrame decoded_frame;
+  uint8_t encoded[80] = {0};
+  size_t encoded_length = 0U;
+
+  expect_true(usb2can_bridge_canfd_frame_to_payload(
+                  &input_frame, encoded, sizeof(encoded), &encoded_length) ==
+                  kUsb2CanStatusOk,
+              "CAN FD 帧编码应成功");
+  expect_true(encoded_length == 15U, "12 字节 CAN FD 负载编码后长度应为 15");
+  expect_true(encoded[0] == 0x23U && encoded[1] == 0x01U,
+              "CAN FD 编码结果应包含小端 CAN ID");
+  expect_true(encoded[2] == 12U, "CAN FD 编码结果应保存实际数据长度");
+
+  expect_true(usb2can_bridge_payload_to_canfd_frame(encoded, encoded_length,
+                                                    &decoded_frame) ==
+                  kUsb2CanStatusOk,
+              "CAN FD 负载解码应成功");
+  expect_true(decoded_frame.can_id == input_frame.can_id,
+              "CAN FD 解码后 ID 应一致");
+  expect_true(decoded_frame.data_length == input_frame.data_length,
+              "CAN FD 解码后长度应一致");
+  expect_true(memcmp(decoded_frame.payload, input_frame.payload,
+                     input_frame.data_length) == 0,
+              "CAN FD 解码后数据区应一致");
+}
+
+static void test_canfd_payload_rejects_invalid_values(void) {
+  Usb2CanFdStandardFrame invalid_id_frame = {
+      .can_id = 0x0800U,
+      .data_length = 12U,
+  };
+  Usb2CanFdStandardFrame invalid_length_frame = {
+      .can_id = 0x0123U,
+      .data_length = 15U,
+  };
+  Usb2CanFdStandardFrame decoded_frame;
+  uint8_t encoded[80] = {0};
+  size_t encoded_length = 0U;
+  const uint8_t invalid_payload[] = {0x23U, 0x01U, 0x09U, 0x00U, 0x01U, 0x02U,
+                                     0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U};
+
+  expect_true(usb2can_bridge_canfd_frame_to_payload(
+                  &invalid_id_frame, encoded, sizeof(encoded), &encoded_length) ==
+                  kUsb2CanStatusInvalidArgument,
+              "越界 CAN ID 应被拒绝");
+  expect_true(usb2can_bridge_canfd_frame_to_payload(&invalid_length_frame,
+                                                    encoded, sizeof(encoded),
+                                                    &encoded_length) ==
+                  kUsb2CanStatusInvalidArgument,
+              "非法 CAN FD 长度应被拒绝");
+  expect_true(usb2can_bridge_payload_to_canfd_frame(invalid_payload,
+                                                    sizeof(invalid_payload),
+                                                    &decoded_frame) ==
+                  kUsb2CanStatusLengthError,
+              "非法 CAN FD 负载长度应被拒绝");
+}
+
 int main(void) {
   test_canfd_length_mapping_accepts_canonical_sizes();
   test_canfd_length_mapping_rejects_non_canonical_sizes();
+  test_canfd_payload_round_trip();
+  test_canfd_payload_rejects_invalid_values();
   printf("usb2can bridge tests passed.\n");
   return 0;
 }
