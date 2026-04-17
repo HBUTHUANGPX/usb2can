@@ -46,6 +46,12 @@ Default values include:
 - Selected mode is not persisted
 - After a successful switch, only the new mode's data commands are accepted
 
+## Stress Entry Points
+
+- Host-side stress runner: `python tools/run_stress_test.py --dry-run`
+- Chinese stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan.md](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/docs/2026-04-17-usb2can-stress-test-plan.md)
+- English stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan-en.md](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/docs/2026-04-17-usb2can-stress-test-plan-en.md)
+
 ## Wire Format
 
 One complete USB protocol frame has this layout:

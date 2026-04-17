@@ -43,6 +43,12 @@
 - 模式切换不持久化，设备重启后恢复 `CAN2_STD`
 - 切换成功后，设备只接受当前活动模式对应的数据命令
 
+## 压测入口
+
+- 主机侧自动压测脚本：`python tools/run_stress_test.py --dry-run`
+- 中文压测方案与执行记录：[docs/2026-04-17-usb2can-stress-test-plan.md](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/docs/2026-04-17-usb2can-stress-test-plan.md)
+- English stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan-en.md](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/docs/2026-04-17-usb2can-stress-test-plan-en.md)
+
 ## 线协议格式
 
 USB 线上一条完整协议帧的字节布局如下：

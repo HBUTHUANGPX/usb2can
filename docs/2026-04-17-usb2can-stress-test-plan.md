@@ -1,4 +1,4 @@
-# USB2CAN 压测方案
+# USB2CAN 压测方案与执行记录
 
 更新日期：2026-04-17
 
@@ -26,6 +26,27 @@
 cd /home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode
 source "$HOME/miniconda3/etc/profile.d/conda.sh"
 conda activate usb2can
+```
+
+## 2.1 自动化脚本入口
+
+当前仓库已提供主机侧自动压测脚本：
+
+```bash
+python tools/run_stress_test.py --dry-run
+```
+
+默认会执行：
+
+- `10` 轮模式切换与查询校验
+- `CAN2 4-byte` 突发发送
+- `CANFD 12-byte` 突发发送
+- `CANFD_BRS 64-byte` 突发发送
+
+也可以只跑指定场景，例如：
+
+```bash
+python tools/run_stress_test.py --scenarios mode-switch canfd-brs-burst
 ```
 
 ## 3. 基础控制面检查
@@ -246,3 +267,42 @@ python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04
 - `CAN FD 64-byte` 无截断
 - 长时间或高频测试中无明显丢帧
 - 板级日志中无持续性错误与 ring overflow
+
+## 10. 2026-04-17 已执行结果
+
+以下内容已在当前 worktree 固件与 `/dev/ttyACM0` 环境下完成：
+
+### 10.1 控制面与模式切换
+
+- 已完成 `get-mode`、`get-capability`、`set-mode(can2/canfd/canfd-brs)` 基础检查
+- 已完成 `10` 轮自动模式切换回归
+- 每轮顺序为：`canfd -> query -> canfd-brs -> query -> can2 -> query`
+- 实测所有轮次都返回正确 `SET_MODE_RSP` 与 `GET_MODE_RSP`
+
+### 10.2 USB -> CAN 主机侧突发发送
+
+- 已执行 `CAN2 4-byte x 50`，主机侧发送成功
+- 已执行 `CANFD 12-byte x 50`，主机侧发送成功
+- 已执行 `CANFD_BRS 64-byte x 50`，建议在你现场配合抓包器继续确认总线侧完整性
+
+### 10.3 板级日志结论
+
+已观察到以下日志序列稳定出现：
+
+- `[usb2can][can] reconfigure begin old=... new=...`
+- `[usb2can][can] active mode=...`
+- `[usb2can][app] active mode switched to ...`
+
+当前未观察到持续复现的：
+
+- `ring overflow`
+- `mcan_transmit_blocking failed`
+- 模式切换后查询结果错位
+
+### 10.4 建议你现场继续执行的项目
+
+下面三项最适合在你烧录后的真实总线环境里继续确认：
+
+- `CANFD_BRS 64-byte` 抓包确认 `BRS=1`
+- `CAN -> USB` 方向的 `100` 帧与 `1000` 帧连续回传
+- 模式错配测试下总线侧“确实不发帧”

@@ -1,4 +1,4 @@
-# USB2CAN Stress Test Plan
+# USB2CAN Stress Test Plan and Execution Record
 
 Updated: 2026-04-17
 
@@ -26,6 +26,27 @@ Recommended setup:
 cd /home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode
 source "$HOME/miniconda3/etc/profile.d/conda.sh"
 conda activate usb2can
+```
+
+## 2.1 Automation Entry
+
+The repository now includes a host-side stress runner:
+
+```bash
+python tools/run_stress_test.py --dry-run
+```
+
+By default it runs:
+
+- `10` rounds of mode switching plus query verification
+- `CAN2 4-byte` burst transmission
+- `CANFD 12-byte` burst transmission
+- `CANFD_BRS 64-byte` burst transmission
+
+You can also select only specific scenarios, for example:
+
+```bash
+python tools/run_stress_test.py --scenarios mode-switch canfd-brs-burst
 ```
 
 ## 3. Basic Control Plane Checks
@@ -246,3 +267,42 @@ Stress testing should be considered passed only when all of the following hold:
 - `64-byte CAN FD` frames are not truncated
 - no obvious frame loss during long or burst traffic
 - board logs show no persistent errors or ring-buffer overflow
+
+## 10. Executed Results on 2026-04-17
+
+The following checks were already executed against the current worktree firmware and `/dev/ttyACM0` environment:
+
+### 10.1 Control plane and mode switching
+
+- completed the basic `get-mode`, `get-capability`, and `set-mode(can2/canfd/canfd-brs)` checks
+- completed `10` rounds of automated mode-switch regression
+- each round used: `canfd -> query -> canfd-brs -> query -> can2 -> query`
+- all rounds returned the expected `SET_MODE_RSP` and `GET_MODE_RSP`
+
+### 10.2 USB -> CAN host-side burst transmission
+
+- completed `CAN2 4-byte x 50`, host-side send succeeded
+- completed `CANFD 12-byte x 50`, host-side send succeeded
+- `CANFD_BRS 64-byte x 50` should be rechecked on your bench with a bus analyzer to confirm on-bus integrity
+
+### 10.3 Board-log conclusion
+
+The following log sequence was observed repeatedly and stably:
+
+- `[usb2can][can] reconfigure begin old=... new=...`
+- `[usb2can][can] active mode=...`
+- `[usb2can][app] active mode switched to ...`
+
+The following issues were not observed as persistent failures:
+
+- `ring overflow`
+- `mcan_transmit_blocking failed`
+- mode/query mismatch after switching
+
+### 10.4 Recommended bench-side follow-up
+
+These items are still best validated on your flashed hardware with a real bus setup:
+
+- confirm `BRS=1` during `CANFD_BRS 64-byte` capture
+- run `100`-frame and `1000`-frame `CAN -> USB` reporting tests
+- confirm that mode-mismatch cases truly produce no bus traffic
