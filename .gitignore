@@ -1,3 +1,4 @@
 build/**
+.worktrees/
 **.pyc
 hpm5300evk_flash_xip_debug/**
