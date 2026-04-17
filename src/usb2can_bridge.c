@@ -8,6 +8,37 @@
 #include <string.h>
 
 /**
+ * @brief 返回 CAN FD DLC 对应的实际负载长度。
+ *
+ * @param dlc 输入 DLC。
+ * @return 对应的实际字节数；非法 DLC 返回 0xFF。
+ */
+static uint8_t usb2can_bridge_canfd_dlc_to_length_internal(uint8_t dlc) {
+  if (dlc <= 8U) {
+    return dlc;
+  }
+
+  switch (dlc) {
+    case 9U:
+      return 12U;
+    case 10U:
+      return 16U;
+    case 11U:
+      return 20U;
+    case 12U:
+      return 24U;
+    case 13U:
+      return 32U;
+    case 14U:
+      return 48U;
+    case 15U:
+      return 64U;
+    default:
+      return 0xFFU;
+  }
+}
+
+/**
  * @brief 计算给定 CAN 帧被编码为协议负载后的长度。
  *
  * @param frame 输入 CAN 标准帧。
@@ -101,5 +132,59 @@ Usb2CanStatus usb2can_bridge_can_frame_to_payload(
     memcpy(&output[3], frame->payload, frame->dlc);
   }
   *output_length = payload_length;
+  return kUsb2CanStatusOk;
+}
+
+Usb2CanStatus usb2can_bridge_canfd_length_to_dlc(uint8_t data_length,
+                                                 uint8_t* dlc) {
+  if (dlc == NULL) {
+    return kUsb2CanStatusInvalidArgument;
+  }
+
+  if (data_length <= 8U) {
+    *dlc = data_length;
+    return kUsb2CanStatusOk;
+  }
+
+  switch (data_length) {
+    case 12U:
+      *dlc = 9U;
+      return kUsb2CanStatusOk;
+    case 16U:
+      *dlc = 10U;
+      return kUsb2CanStatusOk;
+    case 20U:
+      *dlc = 11U;
+      return kUsb2CanStatusOk;
+    case 24U:
+      *dlc = 12U;
+      return kUsb2CanStatusOk;
+    case 32U:
+      *dlc = 13U;
+      return kUsb2CanStatusOk;
+    case 48U:
+      *dlc = 14U;
+      return kUsb2CanStatusOk;
+    case 64U:
+      *dlc = 15U;
+      return kUsb2CanStatusOk;
+    default:
+      return kUsb2CanStatusLengthError;
+  }
+}
+
+Usb2CanStatus usb2can_bridge_canfd_dlc_to_length(uint8_t dlc,
+                                                 uint8_t* data_length) {
+  const uint8_t converted_length =
+      usb2can_bridge_canfd_dlc_to_length_internal(dlc);
+
+  if (data_length == NULL) {
+    return kUsb2CanStatusInvalidArgument;
+  }
+  if (converted_length == 0xFFU) {
+    return kUsb2CanStatusLengthError;
+  }
+
+  *data_length = converted_length;
   return kUsb2CanStatusOk;
 }
