@@ -22,6 +22,12 @@
 #define USB2CAN_APP_TX_BUFFER_SIZE USB2CAN_CONFIG_PROTOCOL_TX_FRAME_BUFFER_SIZE
 /** @brief 错误上报负载大小。 */
 #define USB2CAN_APP_ERROR_PAYLOAD_SIZE 1U
+/** @brief 模式查询上报负载大小。 */
+#define USB2CAN_APP_GET_MODE_PAYLOAD_SIZE 1U
+/** @brief 模式切换结果上报负载大小。 */
+#define USB2CAN_APP_SET_MODE_PAYLOAD_SIZE 2U
+/** @brief 能力查询上报负载大小。 */
+#define USB2CAN_APP_GET_CAPABILITY_PAYLOAD_SIZE 3U
 /** @brief USB 原始输入上报队列深度。 */
 #define USB2CAN_APP_USB_RX_QUEUE_LENGTH 8U
 /** @brief USB 发送消息队列深度。 */
@@ -51,6 +57,16 @@
 static void usb2can_app_report_error(Usb2CanStatus status);
 
 /**
+ * @brief 通过 USB 任务队列发送一条控制平面响应。
+ *
+ * @param cmd 响应命令字。
+ * @param data 负载数据。
+ * @param length 负载长度。
+ */
+static void usb2can_app_queue_control_response(uint8_t cmd, const uint8_t* data,
+                                               uint16_t length);
+
+/**
  * @brief 将内部状态码映射为主机可见错误码。
  *
  * @param status 内部返回状态。
@@ -73,13 +89,20 @@ typedef struct Usb2CanUsbRxChunk {
  * @brief 描述一条待通过 USB 回传给主机的消息。
  */
 typedef struct Usb2CanUsbTxMessage {
-  /** @brief 是否为错误上报。 */
-  bool is_error_report;
+  /** @brief 待发送消息的类型。 */
+  enum {
+    kUsb2CanUsbTxMessageError = 0,
+    kUsb2CanUsbTxMessageControl = 1,
+  } kind;
+  /** @brief 待发送控制消息的命令字。 */
+  uint8_t cmd;
+  /** @brief 待发送控制消息的负载长度。 */
+  uint16_t payload_length;
+  /** @brief 待发送控制消息的负载缓存。 */
+  uint8_t payload[USB2CAN_APP_GET_CAPABILITY_PAYLOAD_SIZE];
   union {
     /** @brief 错误上报时携带的状态码。 */
     Usb2CanStatus status;
-    /** @brief CAN 上报时携带的标准帧。 */
-    Usb2CanStandardFrame frame;
   };
 } Usb2CanUsbTxMessage;
 
@@ -87,8 +110,8 @@ typedef struct Usb2CanUsbTxMessage {
  * @brief 描述 ISR 与 USB 发送任务之间共享的 CAN RX 环形缓冲区。
  */
 typedef struct Usb2CanCanRxRingBuffer {
-  /** @brief 环形缓冲区中的标准 CAN 帧槽位。 */
-  Usb2CanStandardFrame frames[USB2CAN_APP_CAN_RX_RING_LENGTH];
+  /** @brief 环形缓冲区中的总线帧槽位。 */
+  Usb2CanBusFrame frames[USB2CAN_APP_CAN_RX_RING_LENGTH];
   /** @brief 下一次写入位置。 */
   uint32_t write_index;
   /** @brief 下一次读取位置。 */
@@ -103,8 +126,8 @@ typedef struct Usb2CanCanRxRingBuffer {
  * @brief 描述解析任务与 CAN 发送任务之间共享的 CAN TX 环形缓冲区。
  */
 typedef struct Usb2CanCanTxRingBuffer {
-  /** @brief 环形缓冲区中的标准 CAN 帧槽位。 */
-  Usb2CanStandardFrame frames[USB2CAN_APP_CAN_TX_RING_LENGTH];
+  /** @brief 环形缓冲区中的总线帧槽位。 */
+  Usb2CanBusFrame frames[USB2CAN_APP_CAN_TX_RING_LENGTH];
   /** @brief 下一次写入位置。 */
   uint32_t write_index;
   /** @brief 下一次读取位置。 */
@@ -140,6 +163,8 @@ static Usb2CanCanTxRingBuffer g_usb2can_can_tx_ring = {0};
 static TaskHandle_t g_usb2can_usb_tx_task_handle = NULL;
 /** @brief CAN 发送任务句柄。 */
 static TaskHandle_t g_usb2can_can_tx_task_handle = NULL;
+/** @brief 当前活动模式。 */
+static Usb2CanMode g_usb2can_active_mode = kUsb2CanModeCan2Std;
 
 /**
  * @brief 从 ISR 向 CAN RX 环形缓冲区压入一帧。
@@ -148,7 +173,7 @@ static TaskHandle_t g_usb2can_can_tx_task_handle = NULL;
  * @return `true` 表示写入成功，`false` 表示环形缓冲区已满。
  */
 static bool usb2can_app_can_rx_ring_push_from_isr(
-    const Usb2CanStandardFrame* frame) {
+    const Usb2CanBusFrame* frame) {
   bool pushed = false;
   UBaseType_t saved_interrupt_status;
 
@@ -178,7 +203,7 @@ static bool usb2can_app_can_rx_ring_push_from_isr(
  * @param frame 输出的一条标准 CAN 帧。
  * @return `true` 表示成功读到一帧，`false` 表示当前为空。
  */
-static bool usb2can_app_can_rx_ring_pop(Usb2CanStandardFrame* frame) {
+static bool usb2can_app_can_rx_ring_pop(Usb2CanBusFrame* frame) {
   bool popped = false;
 
   if (frame == NULL) {
@@ -205,7 +230,7 @@ static bool usb2can_app_can_rx_ring_pop(Usb2CanStandardFrame* frame) {
  * @param frame 待缓存的标准 CAN 帧。
  * @return `true` 表示写入成功，`false` 表示环形缓冲区已满。
  */
-static bool usb2can_app_can_tx_ring_push(const Usb2CanStandardFrame* frame) {
+static bool usb2can_app_can_tx_ring_push(const Usb2CanBusFrame* frame) {
   bool pushed = false;
 
   if (frame == NULL) {
@@ -234,7 +259,7 @@ static bool usb2can_app_can_tx_ring_push(const Usb2CanStandardFrame* frame) {
  * @param frame 输出的一条标准 CAN 帧。
  * @return `true` 表示成功读到一帧，`false` 表示当前为空。
  */
-static bool usb2can_app_can_tx_ring_pop(Usb2CanStandardFrame* frame) {
+static bool usb2can_app_can_tx_ring_pop(Usb2CanBusFrame* frame) {
   bool popped = false;
 
   if (frame == NULL) {
@@ -298,15 +323,104 @@ static void usb2can_app_usb_rx_task(void* parameter) {
         usb2can_app_report_error(kUsb2CanStatusUnsupported);
         continue;
       }
+      if (packet.cmd == kUsb2CanCommandGetMode) {
+        const uint8_t payload[] = {(uint8_t)g_usb2can_active_mode};
+        usb2can_app_queue_control_response(kUsb2CanCommandGetModeResponse,
+                                           payload, sizeof(payload));
+        continue;
+      }
+      if (packet.cmd == kUsb2CanCommandGetCapability) {
+        const uint8_t payload[] = {
+            (uint8_t)(USB2CAN_CAPABILITY_MODE_CAN2_STD |
+                      USB2CAN_CAPABILITY_MODE_CANFD_STD |
+                      USB2CAN_CAPABILITY_MODE_CANFD_STD_BRS),
+            0x00U,
+            USB2CAN_CANFD_MAX_PAYLOAD_SIZE,
+        };
+        usb2can_app_queue_control_response(
+            kUsb2CanCommandGetCapabilityResponse, payload, sizeof(payload));
+        continue;
+      }
+      if (packet.cmd == kUsb2CanCommandSetMode) {
+        uint8_t response[USB2CAN_APP_SET_MODE_PAYLOAD_SIZE];
+        Usb2CanStatus switch_status = kUsb2CanStatusInvalidArgument;
+
+        if (packet.len == 1U) {
+          switch_status = usb2can_can_reconfigure((Usb2CanMode)packet.data[0]);
+          if (switch_status == kUsb2CanStatusOk) {
+            g_usb2can_active_mode = (Usb2CanMode)packet.data[0];
+            printf("[usb2can][app] active mode switched to %u\n",
+                   (unsigned int)g_usb2can_active_mode);
+          } else {
+            printf("[usb2can][app] mode switch failed requested=%u status=%u active=%u\n",
+                   (unsigned int)packet.data[0], (unsigned int)switch_status,
+                   (unsigned int)g_usb2can_active_mode);
+          }
+        }
+
+        response[0] =
+            (uint8_t)usb2can_app_map_status_to_error_code(switch_status);
+        response[1] = (uint8_t)g_usb2can_active_mode;
+        usb2can_app_queue_control_response(kUsb2CanCommandSetModeResponse,
+                                           response, sizeof(response));
+        continue;
+      }
       if (packet.cmd == kUsb2CanCommandCanTx) {
-        Usb2CanStandardFrame frame;
+        Usb2CanStandardFrame standard_frame;
+        Usb2CanBusFrame frame = {.mode = kUsb2CanModeCan2Std};
         const Usb2CanStatus bridge_status =
-            usb2can_bridge_payload_to_can_frame(packet.data, packet.len, &frame);
+            usb2can_bridge_payload_to_can_frame(packet.data, packet.len,
+                                                &standard_frame);
 
         if (bridge_status != kUsb2CanStatusOk) {
           usb2can_app_report_error(bridge_status);
           continue;
         }
+        if (g_usb2can_active_mode != kUsb2CanModeCan2Std) {
+          printf("[usb2can][app] reject can2 cmd in active mode=%u\n",
+                 (unsigned int)g_usb2can_active_mode);
+          usb2can_app_report_error(kUsb2CanStatusUnsupported);
+          continue;
+        }
+        frame.can_id = standard_frame.can_id;
+        frame.data_length = standard_frame.dlc;
+        memcpy(frame.payload, standard_frame.payload, standard_frame.dlc);
+
+        if (!usb2can_app_can_tx_ring_push(&frame)) {
+          usb2can_app_report_error(kUsb2CanStatusIoError);
+          if (g_usb2can_can_tx_ring.overflow_count !=
+              last_can_tx_overflow_count) {
+            last_can_tx_overflow_count = g_usb2can_can_tx_ring.overflow_count;
+            printf("[usb2can][usb-rx-task] can tx ring overflow count=%lu\n",
+                   (unsigned long)last_can_tx_overflow_count);
+          }
+          continue;
+        }
+
+        if (g_usb2can_can_tx_task_handle != NULL) {
+          xTaskNotifyGive(g_usb2can_can_tx_task_handle);
+        }
+      } else if (packet.cmd == kUsb2CanCommandCanFdTx) {
+        Usb2CanFdStandardFrame fd_frame;
+        Usb2CanBusFrame frame = {.mode = g_usb2can_active_mode};
+        const Usb2CanStatus bridge_status =
+            usb2can_bridge_payload_to_canfd_frame(packet.data, packet.len,
+                                                  &fd_frame);
+
+        if (bridge_status != kUsb2CanStatusOk) {
+          usb2can_app_report_error(bridge_status);
+          continue;
+        }
+        if (g_usb2can_active_mode != kUsb2CanModeCanFdStd &&
+            g_usb2can_active_mode != kUsb2CanModeCanFdStdBrs) {
+          printf("[usb2can][app] reject canfd cmd in active mode=%u\n",
+                 (unsigned int)g_usb2can_active_mode);
+          usb2can_app_report_error(kUsb2CanStatusUnsupported);
+          continue;
+        }
+        frame.can_id = fd_frame.can_id;
+        frame.data_length = fd_frame.data_length;
+        memcpy(frame.payload, fd_frame.payload, fd_frame.data_length);
 
         if (!usb2can_app_can_tx_ring_push(&frame)) {
           usb2can_app_report_error(kUsb2CanStatusIoError);
@@ -338,7 +452,7 @@ static void usb2can_app_usb_rx_task(void* parameter) {
  * @param parameter 未使用。
  */
 static void usb2can_app_can_tx_task(void* parameter) {
-  Usb2CanStandardFrame frame;
+  Usb2CanBusFrame frame;
   bool did_work = false;
 
   (void)parameter;
@@ -347,8 +461,27 @@ static void usb2can_app_can_tx_task(void* parameter) {
     did_work = false;
 
     while (usb2can_app_can_tx_ring_pop(&frame)) {
+      Usb2CanStatus send_status = kUsb2CanStatusUnsupported;
+      Usb2CanStandardFrame standard_frame;
+      Usb2CanFdStandardFrame fd_frame;
+
       did_work = true;
-      if (usb2can_can_send(&frame) != kUsb2CanStatusOk) {
+      if (frame.mode == kUsb2CanModeCan2Std) {
+        memset(&standard_frame, 0, sizeof(standard_frame));
+        standard_frame.can_id = frame.can_id;
+        standard_frame.dlc = frame.data_length;
+        memcpy(standard_frame.payload, frame.payload, frame.data_length);
+        send_status = usb2can_can_send(&standard_frame);
+      } else {
+        memset(&fd_frame, 0, sizeof(fd_frame));
+        fd_frame.can_id = frame.can_id;
+        fd_frame.data_length = frame.data_length;
+        memcpy(fd_frame.payload, frame.payload, frame.data_length);
+        send_status = usb2can_can_send_fd(
+            &fd_frame, frame.mode == kUsb2CanModeCanFdStdBrs);
+      }
+
+      if (send_status != kUsb2CanStatusOk) {
         usb2can_app_report_error(kUsb2CanStatusIoError);
       }
     }
@@ -369,7 +502,7 @@ static void usb2can_app_can_tx_task(void* parameter) {
  */
 static void usb2can_app_usb_tx_task(void* parameter) {
   Usb2CanUsbTxMessage message;
-  Usb2CanStandardFrame frame;
+  Usb2CanBusFrame frame;
   Usb2CanPacket packet;
   size_t payload_length = 0U;
   size_t output_length = 0U;
@@ -387,13 +520,20 @@ static void usb2can_app_usb_tx_task(void* parameter) {
         continue;
       }
 
-      g_usb2can_tx_payload_buffer[0] =
-          (uint8_t)usb2can_app_map_status_to_error_code(message.status);
       packet.head = g_usb2can_app_config.protocol_head;
-      packet.cmd = kUsb2CanCommandErrorReport;
-      packet.len = USB2CAN_APP_ERROR_PAYLOAD_SIZE;
       packet.data = g_usb2can_tx_payload_buffer;
       packet.data_capacity = USB2CAN_APP_TX_BUFFER_SIZE;
+      if (message.kind == kUsb2CanUsbTxMessageError) {
+        g_usb2can_tx_payload_buffer[0] =
+            (uint8_t)usb2can_app_map_status_to_error_code(message.status);
+        packet.cmd = kUsb2CanCommandErrorReport;
+        packet.len = USB2CAN_APP_ERROR_PAYLOAD_SIZE;
+      } else {
+        packet.cmd = message.cmd;
+        packet.len = message.payload_length;
+        memcpy(g_usb2can_tx_payload_buffer, message.payload,
+               message.payload_length);
+      }
 
       if (usb2can_protocol_encode(&packet, g_usb2can_tx_frame_buffer,
                                   sizeof(g_usb2can_tx_frame_buffer),
@@ -413,18 +553,43 @@ static void usb2can_app_usb_tx_task(void* parameter) {
       if (!usb2can_usb_is_ready()) {
         continue;
       }
-      if (usb2can_bridge_can_frame_to_payload(
-              &frame, g_usb2can_tx_payload_buffer,
-              sizeof(g_usb2can_tx_payload_buffer), &payload_length) !=
-          kUsb2CanStatusOk) {
-        continue;
-      }
 
       packet.head = g_usb2can_app_config.protocol_head;
-      packet.cmd = kUsb2CanCommandCanRxReport;
-      packet.len = (uint16_t)payload_length;
       packet.data = g_usb2can_tx_payload_buffer;
       packet.data_capacity = USB2CAN_APP_TX_BUFFER_SIZE;
+      if (frame.mode != g_usb2can_active_mode) {
+        printf("[usb2can][usb-tx-task] drop rx frame mode=%u active=%u\n",
+               (unsigned int)frame.mode, (unsigned int)g_usb2can_active_mode);
+        continue;
+      }
+      if (frame.mode == kUsb2CanModeCan2Std) {
+        Usb2CanStandardFrame standard_frame = {
+            .can_id = frame.can_id,
+            .dlc = frame.data_length,
+        };
+        memcpy(standard_frame.payload, frame.payload, frame.data_length);
+        if (usb2can_bridge_can_frame_to_payload(
+                &standard_frame, g_usb2can_tx_payload_buffer,
+                sizeof(g_usb2can_tx_payload_buffer), &payload_length) !=
+            kUsb2CanStatusOk) {
+          continue;
+        }
+        packet.cmd = kUsb2CanCommandCanRxReport;
+      } else {
+        Usb2CanFdStandardFrame fd_frame = {
+            .can_id = frame.can_id,
+            .data_length = frame.data_length,
+        };
+        memcpy(fd_frame.payload, frame.payload, frame.data_length);
+        if (usb2can_bridge_canfd_frame_to_payload(
+                &fd_frame, g_usb2can_tx_payload_buffer,
+                sizeof(g_usb2can_tx_payload_buffer), &payload_length) !=
+            kUsb2CanStatusOk) {
+          continue;
+        }
+        packet.cmd = kUsb2CanCommandCanFdRxReport;
+      }
+      packet.len = (uint16_t)payload_length;
 
       if (usb2can_protocol_encode(&packet, g_usb2can_tx_frame_buffer,
                                   sizeof(g_usb2can_tx_frame_buffer),
@@ -487,13 +652,33 @@ static Usb2CanErrorCode usb2can_app_map_status_to_error_code(
  */
 static void usb2can_app_report_error(Usb2CanStatus status) {
   Usb2CanUsbTxMessage message = {
-      .is_error_report = true,
+      .kind = kUsb2CanUsbTxMessageError,
       .status = status,
   };
 
   if (g_usb2can_usb_tx_queue == NULL) {
     return;
   }
+  (void)xQueueSend(g_usb2can_usb_tx_queue, &message, 0U);
+  if (g_usb2can_usb_tx_task_handle != NULL) {
+    xTaskNotifyGive(g_usb2can_usb_tx_task_handle);
+  }
+}
+
+static void usb2can_app_queue_control_response(uint8_t cmd, const uint8_t* data,
+                                               uint16_t length) {
+  Usb2CanUsbTxMessage message = {
+      .kind = kUsb2CanUsbTxMessageControl,
+      .cmd = cmd,
+      .payload_length = length,
+  };
+
+  if (data == NULL || length > sizeof(message.payload) ||
+      g_usb2can_usb_tx_queue == NULL) {
+    return;
+  }
+
+  memcpy(message.payload, data, length);
   (void)xQueueSend(g_usb2can_usb_tx_queue, &message, 0U);
   if (g_usb2can_usb_tx_task_handle != NULL) {
     xTaskNotifyGive(g_usb2can_usb_tx_task_handle);
@@ -514,6 +699,7 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
   }
 
   g_usb2can_app_config = *config;
+  g_usb2can_active_mode = kUsb2CanModeCan2Std;
   g_usb2can_usb_rx_queue = xQueueCreate(USB2CAN_APP_USB_RX_QUEUE_LENGTH,
                                         sizeof(Usb2CanUsbRxChunk));
   if (g_usb2can_usb_rx_queue == NULL) {
@@ -556,6 +742,8 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
     return kUsb2CanStatusIoError;
   }
   can_config.baudrate = g_usb2can_app_config.can_baudrate;
+  can_config.baudrate_fd = USB2CAN_CONFIG_CANFD_DATA_BAUDRATE;
+  can_config.initial_mode = g_usb2can_active_mode;
   printf("[usb2can][app] init protocol_head=0x%02X can_baudrate=%lu\n",
          g_usb2can_app_config.protocol_head,
          (unsigned long)g_usb2can_app_config.can_baudrate);
@@ -612,7 +800,7 @@ void usb2can_app_on_usb_rx(const uint8_t* data, size_t length) {
  *
  * @param frame 收到的 CAN 标准帧。
  */
-void usb2can_app_on_can_rx(const Usb2CanStandardFrame* frame) {
+void usb2can_app_on_can_rx(const Usb2CanBusFrame* frame) {
   BaseType_t task_woken = pdFALSE;
 
   if (frame == NULL) {

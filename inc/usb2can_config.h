@@ -40,6 +40,8 @@
 
 /** @brief CAN2.0 默认波特率。 */
 #define USB2CAN_CONFIG_CAN_BAUDRATE 1000000UL
+/** @brief CAN FD 默认数据相位波特率。 */
+#define USB2CAN_CONFIG_CANFD_DATA_BAUDRATE 2000000UL
 
 /** @brief USB 设备厂商字符串。 */
 #define USB2CAN_CONFIG_USB_MANUFACTURER_STRING "HPMicro"

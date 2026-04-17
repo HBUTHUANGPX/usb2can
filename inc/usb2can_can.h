@@ -15,6 +15,10 @@
 typedef struct Usb2CanCanConfig {
   /** @brief 经典 CAN 的目标波特率，单位为 bit/s。 */
   uint32_t baudrate;
+  /** @brief CAN FD 数据相位波特率，单位为 bit/s。 */
+  uint32_t baudrate_fd;
+  /** @brief 初始活动模式。 */
+  Usb2CanMode initial_mode;
 } Usb2CanCanConfig;
 
 /**
@@ -22,7 +26,7 @@ typedef struct Usb2CanCanConfig {
  *
  * @param frame 最新收到的一条标准 CAN 数据帧。
  */
-typedef void (*Usb2CanCanRxCallback)(const Usb2CanStandardFrame* frame);
+typedef void (*Usb2CanCanRxCallback)(const Usb2CanBusFrame* frame);
 
 /**
  * @brief 初始化 MCAN 外设与接收中断。
@@ -34,11 +38,36 @@ Usb2CanStatus usb2can_can_init(const Usb2CanCanConfig* config,
                                Usb2CanCanRxCallback rx_callback);
 
 /**
+ * @brief 查询 CAN 适配层当前模式。
+ *
+ * @return 当前模式。
+ */
+Usb2CanMode usb2can_can_get_mode(void);
+
+/**
+ * @brief 重新配置 MCAN 为指定模式。
+ *
+ * @param mode 目标模式。
+ * @return 配置状态。
+ */
+Usb2CanStatus usb2can_can_reconfigure(Usb2CanMode mode);
+
+/**
  * @brief 发送一条标准 CAN 数据帧。
  *
  * @param frame 待发送的 CAN 标准帧。
  * @return 发送状态。
  */
 Usb2CanStatus usb2can_can_send(const Usb2CanStandardFrame* frame);
+
+/**
+ * @brief 发送一条 CAN FD 标准数据帧。
+ *
+ * @param frame 待发送的 CAN FD 标准帧。
+ * @param enable_brs 是否启用 BRS。
+ * @return 发送状态。
+ */
+Usb2CanStatus usb2can_can_send_fd(const Usb2CanFdStandardFrame* frame,
+                                  bool enable_brs);
 
 #endif  // USB2CAN_INC_USB2CAN_CAN_H_

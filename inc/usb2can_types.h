@@ -89,6 +89,13 @@ typedef enum Usb2CanMode {
   kUsb2CanModeCanFdStdBrs = 0x02,
 } Usb2CanMode;
 
+/** @brief 固件支持 CAN2 标准模式能力位。 */
+#define USB2CAN_CAPABILITY_MODE_CAN2_STD (1U << 0)
+/** @brief 固件支持 CAN FD 标准模式能力位。 */
+#define USB2CAN_CAPABILITY_MODE_CANFD_STD (1U << 1)
+/** @brief 固件支持 CAN FD BRS 模式能力位。 */
+#define USB2CAN_CAPABILITY_MODE_CANFD_STD_BRS (1U << 2)
+
 /**
  * @brief USB2CAN 主机可见错误码定义。
  *
@@ -144,6 +151,23 @@ typedef struct Usb2CanFdStandardFrame {
   /** @brief CAN FD 数据区，实际使用前 data_length 个字节。 */
   uint8_t payload[USB2CAN_CANFD_MAX_PAYLOAD_SIZE];
 } Usb2CanFdStandardFrame;
+
+/**
+ * @brief 表示一条用于 CAN 适配层与应用层之间传递的总线帧。
+ *
+ * 该结构统一承载经典 CAN 与 CAN FD 标准帧，便于模式切换后复用同一套任务队列
+ * 和 ISR 上报逻辑。
+ */
+typedef struct Usb2CanBusFrame {
+  /** @brief 当前帧所属的模式。 */
+  Usb2CanMode mode;
+  /** @brief 11-bit 标准帧 ID，仅低 11 位有效。 */
+  uint16_t can_id;
+  /** @brief 实际数据长度。CAN2 范围为 0~8，CAN FD 为 0~64。 */
+  uint8_t data_length;
+  /** @brief 负载字节。 */
+  uint8_t payload[USB2CAN_CANFD_MAX_PAYLOAD_SIZE];
+} Usb2CanBusFrame;
 
 /**
  * @brief 表示一条完整的 USB2CAN 协议包视图。
