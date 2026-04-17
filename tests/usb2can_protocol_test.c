@@ -211,6 +211,61 @@ static void test_shared_canfd_mode_types_exist(void) {
 }
 
 /**
+ * @brief 验证控制平面命令可以复用现有协议外壳完成编解码。
+ */
+static void test_protocol_encode_decode_control_packets(void) {
+  uint8_t set_mode_payload[] = {kUsb2CanModeCanFdStd};
+  uint8_t capability_payload[] = {0x07U, 0x00U, 0x40U};
+  uint8_t encoded[32] = {0};
+  uint8_t decoded_payload[8] = {0};
+  Usb2CanPacket packet = {
+      .head = USB2CAN_CONFIG_PROTOCOL_HEAD,
+      .cmd = kUsb2CanCommandSetMode,
+      .len = (uint16_t)sizeof(set_mode_payload),
+      .data = set_mode_payload,
+      .data_capacity = (uint16_t)sizeof(set_mode_payload),
+  };
+  Usb2CanPacket decoded = {
+      .data = decoded_payload,
+      .data_capacity = (uint16_t)sizeof(decoded_payload),
+  };
+  size_t encoded_length = 0U;
+
+  expect_true(usb2can_protocol_encode(&packet, encoded, sizeof(encoded),
+                                      &encoded_length) == kUsb2CanStatusOk,
+              "SET_MODE 请求编码应成功");
+  expect_true(usb2can_protocol_decode(encoded, encoded_length, &decoded) ==
+                  kUsb2CanStatusOk,
+              "SET_MODE 请求解码应成功");
+  expect_true(decoded.cmd == kUsb2CanCommandSetMode,
+              "SET_MODE 请求命令字应保持一致");
+  expect_true(decoded.len == sizeof(set_mode_payload),
+              "SET_MODE 请求负载长度应保持一致");
+  expect_true(decoded.data[0] == kUsb2CanModeCanFdStd,
+              "SET_MODE 请求负载应保持一致");
+
+  packet.cmd = kUsb2CanCommandGetCapabilityResponse;
+  packet.len = (uint16_t)sizeof(capability_payload);
+  packet.data = capability_payload;
+  packet.data_capacity = (uint16_t)sizeof(capability_payload);
+  memset(decoded_payload, 0, sizeof(decoded_payload));
+
+  expect_true(usb2can_protocol_encode(&packet, encoded, sizeof(encoded),
+                                      &encoded_length) == kUsb2CanStatusOk,
+              "GET_CAPABILITY_RSP 编码应成功");
+  expect_true(usb2can_protocol_decode(encoded, encoded_length, &decoded) ==
+                  kUsb2CanStatusOk,
+              "GET_CAPABILITY_RSP 解码应成功");
+  expect_true(decoded.cmd == kUsb2CanCommandGetCapabilityResponse,
+              "GET_CAPABILITY_RSP 命令字应保持一致");
+  expect_true(decoded.len == sizeof(capability_payload),
+              "GET_CAPABILITY_RSP 负载长度应保持一致");
+  expect_true(memcmp(decoded.data, capability_payload,
+                     sizeof(capability_payload)) == 0,
+              "GET_CAPABILITY_RSP 负载应保持一致");
+}
+
+/**
  * @brief 宿主机测试程序入口。
  *
  * @return 全部测试通过时返回 0。
@@ -222,6 +277,7 @@ int main(void) {
   test_bridge_converts_payload_to_can_frame();
   test_bridge_rejects_invalid_dlc();
   test_shared_canfd_mode_types_exist();
+  test_protocol_encode_decode_control_packets();
   printf("usb2can protocol tests passed.\n");
   return 0;
 }
