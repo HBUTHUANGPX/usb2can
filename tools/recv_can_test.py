@@ -15,7 +15,18 @@ import serial
 PROTOCOL_HEAD = 0xA5
 CMD_CAN_TX = 0x01
 CMD_CAN_RX_REPORT = 0x02
+CMD_CANFD_TX = 0x03
+CMD_CANFD_RX_REPORT = 0x04
+CMD_GET_MODE = 0x10
+CMD_GET_MODE_RSP = 0x11
+CMD_SET_MODE = 0x12
+CMD_SET_MODE_RSP = 0x13
+CMD_GET_CAPABILITY = 0x14
+CMD_GET_CAPABILITY_RSP = 0x15
 CMD_ERROR_REPORT = 0x7F
+MODE_CAN2_STD = 0x00
+MODE_CANFD_STD = 0x01
+MODE_CANFD_STD_BRS = 0x02
 HEADER_SIZE = 5
 CRC16_SIZE = 2
 DEFAULT_PORT = "/dev/ttyACM0"
@@ -116,6 +127,41 @@ def decode_packet(packet: dict) -> dict:
             "raw_frame": packet["raw_frame"],
         }
 
+    if packet["cmd"] == CMD_CANFD_RX_REPORT:
+        if len(data) < 3:
+            raise ValueError("CAN FD report payload too short")
+        can_id = int.from_bytes(data[0:2], byteorder="little")
+        data_length = data[2]
+        payload = data[3:]
+        if len(payload) != data_length:
+            raise ValueError("CAN FD report length mismatch")
+        return {
+            "kind": "canfd_rx",
+            "can_id": can_id,
+            "data_length": data_length,
+            "payload": payload,
+            "raw_frame": packet["raw_frame"],
+        }
+
+    if packet["cmd"] == CMD_GET_MODE_RSP:
+        if len(data) != 1:
+            raise ValueError("get mode response payload length mismatch")
+        return {
+            "kind": "get_mode_rsp",
+            "mode": data[0],
+            "raw_frame": packet["raw_frame"],
+        }
+
+    if packet["cmd"] == CMD_GET_CAPABILITY_RSP:
+        if len(data) != 3:
+            raise ValueError("get capability response payload length mismatch")
+        return {
+            "kind": "get_capability_rsp",
+            "mode_bitmap": int.from_bytes(data[0:2], byteorder="little"),
+            "max_canfd_length": data[2],
+            "raw_frame": packet["raw_frame"],
+        }
+
     if packet["cmd"] == CMD_ERROR_REPORT:
         if len(data) != 1:
             raise ValueError("error report payload length mismatch")
@@ -141,6 +187,24 @@ def format_decoded_message(message: dict) -> str:
             f"CAN_RX can_id=0x{message['can_id']:03X} "
             f"dlc={message['dlc']} "
             f"payload={format_hex(message['payload'])} "
+            f"raw={format_hex(message['raw_frame'])}"
+        )
+
+    if message["kind"] == "canfd_rx":
+        return (
+            f"CANFD_RX can_id=0x{message['can_id']:03X} "
+            f"len={message['data_length']} "
+            f"payload={format_hex(message['payload'])} "
+            f"raw={format_hex(message['raw_frame'])}"
+        )
+
+    if message["kind"] == "get_mode_rsp":
+        return f"GET_MODE_RSP mode=0x{message['mode']:02X} raw={format_hex(message['raw_frame'])}"
+
+    if message["kind"] == "get_capability_rsp":
+        return (
+            f"GET_CAPABILITY_RSP mode_bitmap=0x{message['mode_bitmap']:04X} "
+            f"max_canfd_length={message['max_canfd_length']} "
             f"raw={format_hex(message['raw_frame'])}"
         )
 

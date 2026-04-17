@@ -38,6 +38,48 @@ class ParsePacketTest(unittest.TestCase):
         self.assertEqual(decoded["dlc"], 4)
         self.assertEqual(decoded["payload"], bytes([0x11, 0x22, 0x33, 0x44]))
 
+    def test_decode_canfd_frame_from_report(self):
+        packet = {
+            "cmd": recv_can_test.CMD_CANFD_RX_REPORT,
+            "data": bytes([0x23, 0x01, 0x0C]) + bytes(range(12)),
+            "raw_frame": bytes(
+                [0xA5, 0x04, 0x0F, 0x00, 0x80, 0xD7, 0x68, 0x23, 0x01, 0x0C]
+                + list(range(12))
+            ),
+        }
+
+        decoded = recv_can_test.decode_packet(packet)
+
+        self.assertEqual(decoded["kind"], "canfd_rx")
+        self.assertEqual(decoded["can_id"], 0x123)
+        self.assertEqual(decoded["data_length"], 12)
+        self.assertEqual(decoded["payload"], bytes(range(12)))
+
+    def test_decode_get_mode_response(self):
+        packet = {
+            "cmd": recv_can_test.CMD_GET_MODE_RSP,
+            "data": bytes([recv_can_test.MODE_CANFD_STD_BRS]),
+            "raw_frame": bytes([0xA5, 0x11, 0x01, 0x00, 0x6D, 0x00, 0x41, 0x02]),
+        }
+
+        decoded = recv_can_test.decode_packet(packet)
+
+        self.assertEqual(decoded["kind"], "get_mode_rsp")
+        self.assertEqual(decoded["mode"], recv_can_test.MODE_CANFD_STD_BRS)
+
+    def test_decode_get_capability_response(self):
+        packet = {
+            "cmd": recv_can_test.CMD_GET_CAPABILITY_RSP,
+            "data": bytes([0x07, 0x00, 0x40]),
+            "raw_frame": bytes([0xA5, 0x15, 0x03, 0x00, 0x29, 0x6A, 0x34, 0x07, 0x00, 0x40]),
+        }
+
+        decoded = recv_can_test.decode_packet(packet)
+
+        self.assertEqual(decoded["kind"], "get_capability_rsp")
+        self.assertEqual(decoded["mode_bitmap"], 0x0007)
+        self.assertEqual(decoded["max_canfd_length"], 64)
+
 
 class StreamParserTest(unittest.TestCase):
     def test_stream_parser_reassembles_frame_across_chunks(self):
@@ -71,6 +113,24 @@ class FormatMessageTest(unittest.TestCase):
         self.assertIn("CAN_RX", message)
         self.assertIn("0x123", message)
         self.assertIn("11 22 33 44", message)
+
+    def test_format_canfd_rx_message_contains_expected_fields(self):
+        message = recv_can_test.format_decoded_message(
+            {
+                "kind": "canfd_rx",
+                "can_id": 0x123,
+                "data_length": 12,
+                "payload": bytes(range(12)),
+                "raw_frame": bytes(
+                    [0xA5, 0x04, 0x0F, 0x00, 0x80, 0xD7, 0x68, 0x23, 0x01, 0x0C]
+                    + list(range(12))
+                ),
+            }
+        )
+
+        self.assertIn("CANFD_RX", message)
+        self.assertIn("len=12", message)
+        self.assertIn("00 01 02 03 04 05 06 07 08 09 0A 0B", message)
 
 
 if __name__ == "__main__":

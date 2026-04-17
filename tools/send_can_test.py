@@ -10,9 +10,20 @@ from typing import Iterable
 
 PROTOCOL_HEAD = 0xA5
 CMD_CAN_TX = 0x01
+CMD_CANFD_TX = 0x03
+CMD_SET_MODE = 0x12
 DEFAULT_PORT = "/dev/ttyACM0"
 DEFAULT_CAN_ID = 0x123
 DEFAULT_DATA = bytes([0x11, 0x22, 0x33, 0x44])
+MODE_CAN2_STD = 0x00
+MODE_CANFD_STD = 0x01
+MODE_CANFD_STD_BRS = 0x02
+MODE_NAME_TO_ID = {
+    "can2": MODE_CAN2_STD,
+    "canfd": MODE_CANFD_STD,
+    "canfd-brs": MODE_CANFD_STD_BRS,
+}
+CANFD_VALID_LENGTHS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64}
 
 
 def crc8(data: bytes) -> int:
@@ -58,9 +69,6 @@ def parse_data_bytes(text: str) -> bytes:
             raise argparse.ArgumentTypeError(f"byte out of range: {item}")
         values.append(value)
 
-    if len(values) > 8:
-        raise argparse.ArgumentTypeError("CAN payload supports at most 8 bytes")
-
     return bytes(values)
 
 
@@ -72,12 +80,29 @@ def build_payload(can_id: int, payload: bytes) -> bytes:
     return can_id.to_bytes(2, byteorder="little") + bytes([len(payload)]) + payload
 
 
-def build_protocol_frame(can_id: int, payload: bytes) -> bytes:
-    data = build_payload(can_id, payload)
-    header = bytes([PROTOCOL_HEAD, CMD_CAN_TX]) + len(data).to_bytes(2, byteorder="little")
+def build_raw_protocol_frame(cmd: int, data: bytes) -> bytes:
+    header = bytes([PROTOCOL_HEAD, cmd]) + len(data).to_bytes(2, byteorder="little")
     header_crc = bytes([crc8(header)])
     data_crc = crc16(data).to_bytes(2, byteorder="little")
     return header + header_crc + data_crc + data
+
+
+def build_protocol_frame(can_id: int, payload: bytes) -> bytes:
+    if len(payload) > 8:
+        raise ValueError("CAN2 payload supports at most 8 bytes")
+    data = build_payload(can_id, payload)
+    return build_raw_protocol_frame(CMD_CAN_TX, data)
+
+
+def build_set_mode_frame(mode_id: int) -> bytes:
+    return build_raw_protocol_frame(CMD_SET_MODE, bytes([mode_id]))
+
+
+def build_canfd_protocol_frame(can_id: int, payload: bytes) -> bytes:
+    if len(payload) not in CANFD_VALID_LENGTHS:
+        raise ValueError("CAN FD payload length must be one of 0..8,12,16,20,24,32,48,64")
+    data = can_id.to_bytes(2, byteorder="little") + bytes([len(payload)]) + payload
+    return build_raw_protocol_frame(CMD_CANFD_TX, data)
 
 
 def build_batched_frames(frame: bytes, count: int) -> bytes:
@@ -90,6 +115,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send USB2CAN test frames over USB CDC ACM.")
     parser.add_argument("--port", default=DEFAULT_PORT, help="Serial device path.")
     parser.add_argument("--baudrate", type=int, default=115200, help="Host serial baudrate setting.")
+    parser.add_argument(
+        "--mode",
+        choices=sorted(MODE_NAME_TO_ID.keys()),
+        default="can2",
+        help="Active communication mode to request before data transmission.",
+    )
     parser.add_argument("--can-id", default=hex(DEFAULT_CAN_ID), help="Standard CAN ID, e.g. 0x123.")
     parser.add_argument(
         "--data",
@@ -120,6 +151,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--interval must be >= 0")
     if args.pack_count and args.count == 0:
         parser.error("--pack-count requires --count > 0")
+    if args.mode == "can2" and len(parse_data_bytes(args.data)) > 8:
+        parser.error("CAN2 mode payload supports at most 8 bytes")
+    if args.mode != "can2" and len(parse_data_bytes(args.data)) not in CANFD_VALID_LENGTHS:
+        parser.error("CAN FD mode payload length must be one of 0..8,12,16,20,24,32,48,64")
     return args
 
 
@@ -133,12 +168,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     can_id = parse_can_id(args.can_id)
     payload = parse_data_bytes(args.data)
-    frame = build_protocol_frame(can_id, payload)
+    mode_id = MODE_NAME_TO_ID[args.mode]
+    mode_frame = build_set_mode_frame(mode_id)
+    frame = build_protocol_frame(can_id, payload) if args.mode == "can2" else build_canfd_protocol_frame(can_id, payload)
 
     print(f"port: {args.port}")
     print(f"can_id: 0x{can_id:03X}")
+    print(f"mode_select[{len(mode_frame)}]: {format_hex(mode_frame)}")
     print(f"payload[{len(payload)}]: {format_hex(payload)}")
     print(f"usb_frame[{len(frame)}]: {format_hex(frame)}")
+    print(f"active_mode: {args.mode}")
     if args.count == 0:
         print("mode: continuous")
     elif args.pack_count:
@@ -149,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with serial.Serial(args.port, baudrate=args.baudrate, timeout=1) as ser:
             index = 0
+            ser.write(mode_frame)
+            ser.flush()
             if args.pack_count:
                 batched_frames = build_batched_frames(frame, args.count)
                 written = ser.write(batched_frames)

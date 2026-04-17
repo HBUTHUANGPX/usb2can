@@ -266,6 +266,25 @@ static void test_protocol_encode_decode_control_packets(void) {
 }
 
 /**
+ * @brief 验证协议与桥接缓冲区足以承载最大 CAN FD 协议帧。
+ */
+static void test_canfd_buffer_configuration_is_large_enough(void) {
+  const size_t max_canfd_payload_length = 2U + 1U + USB2CAN_CANFD_MAX_PAYLOAD_SIZE;
+  const size_t max_protocol_frame_length =
+      USB2CAN_PROTOCOL_HEADER_SIZE + USB2CAN_PROTOCOL_CRC16_SIZE +
+      max_canfd_payload_length;
+
+  expect_true(USB2CAN_CONFIG_PROTOCOL_FRAME_BUFFER_SIZE >= max_protocol_frame_length,
+              "协议解析缓冲区必须能容纳最大 CAN FD 协议帧");
+  expect_true(
+      USB2CAN_CONFIG_PROTOCOL_TX_FRAME_BUFFER_SIZE >= max_protocol_frame_length,
+      "协议发送整包缓冲区必须能容纳最大 CAN FD 协议帧");
+  expect_true(
+      USB2CAN_CONFIG_PROTOCOL_TX_PAYLOAD_BUFFER_SIZE >= max_canfd_payload_length,
+      "协议发送负载缓冲区必须能容纳最大 CAN FD 负载");
+}
+
+/**
  * @brief 宿主机测试程序入口。
  *
  * @return 全部测试通过时返回 0。
@@ -278,6 +297,7 @@ int main(void) {
   test_bridge_rejects_invalid_dlc();
   test_shared_canfd_mode_types_exist();
   test_protocol_encode_decode_control_packets();
+  test_canfd_buffer_configuration_is_large_enough();
   printf("usb2can protocol tests passed.\n");
   return 0;
 }
