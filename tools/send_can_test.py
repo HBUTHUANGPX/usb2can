@@ -108,6 +108,10 @@ def build_get_capability_frame() -> bytes:
     return build_raw_protocol_frame(CMD_GET_CAPABILITY, b"")
 
 
+def should_send_mode_select(args: argparse.Namespace) -> bool:
+    return args.query is None
+
+
 def build_canfd_protocol_frame(can_id: int, payload: bytes) -> bytes:
     if len(payload) not in CANFD_VALID_LENGTHS:
         raise ValueError("CAN FD payload length must be one of 0..8,12,16,20,24,32,48,64")
@@ -247,9 +251,10 @@ def main(argv: list[str] | None = None) -> int:
                         return
 
             index = 0
-            ser.write(mode_frame)
-            ser.flush()
-            read_responses("mode_rsp")
+            if should_send_mode_select(args):
+                ser.write(mode_frame)
+                ser.flush()
+                read_responses("mode_rsp")
             if args.set_mode_only:
                 return 0
             if args.query is not None:

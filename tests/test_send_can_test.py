@@ -129,6 +129,16 @@ class ParseArgsTest(unittest.TestCase):
 
         self.assertTrue(args.set_mode_only)
 
+    def test_should_send_mode_select_is_false_for_query(self):
+        args = send_can_test.parse_args(["--query", "get-mode"])
+
+        self.assertFalse(send_can_test.should_send_mode_select(args))
+
+    def test_should_send_mode_select_is_true_for_data_send(self):
+        args = send_can_test.parse_args(["--mode", "canfd"])
+
+        self.assertTrue(send_can_test.should_send_mode_select(args))
+
 
 if __name__ == "__main__":
     unittest.main()

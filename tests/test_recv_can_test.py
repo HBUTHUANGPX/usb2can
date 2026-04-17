@@ -67,6 +67,19 @@ class ParsePacketTest(unittest.TestCase):
         self.assertEqual(decoded["kind"], "get_mode_rsp")
         self.assertEqual(decoded["mode"], recv_can_test.MODE_CANFD_STD_BRS)
 
+    def test_decode_set_mode_response(self):
+        packet = {
+            "cmd": recv_can_test.CMD_SET_MODE_RSP,
+            "data": bytes([0x00, recv_can_test.MODE_CANFD_STD]),
+            "raw_frame": bytes([0xA5, 0x13, 0x02, 0x00, 0x74, 0x2E, 0x0D, 0x00, 0x01]),
+        }
+
+        decoded = recv_can_test.decode_packet(packet)
+
+        self.assertEqual(decoded["kind"], "set_mode_rsp")
+        self.assertEqual(decoded["status"], 0x00)
+        self.assertEqual(decoded["mode"], recv_can_test.MODE_CANFD_STD)
+
     def test_decode_get_capability_response(self):
         packet = {
             "cmd": recv_can_test.CMD_GET_CAPABILITY_RSP,
@@ -131,6 +144,20 @@ class FormatMessageTest(unittest.TestCase):
         self.assertIn("CANFD_RX", message)
         self.assertIn("len=12", message)
         self.assertIn("00 01 02 03 04 05 06 07 08 09 0A 0B", message)
+
+    def test_format_set_mode_response_contains_expected_fields(self):
+        message = recv_can_test.format_decoded_message(
+            {
+                "kind": "set_mode_rsp",
+                "status": 0x00,
+                "mode": recv_can_test.MODE_CANFD_STD,
+                "raw_frame": bytes([0xA5, 0x13, 0x02, 0x00, 0x74, 0x2E, 0x0D, 0x00, 0x01]),
+            }
+        )
+
+        self.assertIn("SET_MODE_RSP", message)
+        self.assertIn("status=0x00", message)
+        self.assertIn("mode=0x01", message)
 
 
 if __name__ == "__main__":

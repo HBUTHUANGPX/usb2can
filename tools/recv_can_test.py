@@ -152,6 +152,16 @@ def decode_packet(packet: dict) -> dict:
             "raw_frame": packet["raw_frame"],
         }
 
+    if packet["cmd"] == CMD_SET_MODE_RSP:
+        if len(data) != 2:
+            raise ValueError("set mode response payload length mismatch")
+        return {
+            "kind": "set_mode_rsp",
+            "status": data[0],
+            "mode": data[1],
+            "raw_frame": packet["raw_frame"],
+        }
+
     if packet["cmd"] == CMD_GET_CAPABILITY_RSP:
         if len(data) != 3:
             raise ValueError("get capability response payload length mismatch")
@@ -200,6 +210,13 @@ def format_decoded_message(message: dict) -> str:
 
     if message["kind"] == "get_mode_rsp":
         return f"GET_MODE_RSP mode=0x{message['mode']:02X} raw={format_hex(message['raw_frame'])}"
+
+    if message["kind"] == "set_mode_rsp":
+        return (
+            f"SET_MODE_RSP status=0x{message['status']:02X} "
+            f"mode=0x{message['mode']:02X} "
+            f"raw={format_hex(message['raw_frame'])}"
+        )
 
     if message["kind"] == "get_capability_rsp":
         return (
