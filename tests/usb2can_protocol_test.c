@@ -179,6 +179,38 @@ static void test_bridge_rejects_invalid_dlc(void) {
 }
 
 /**
+ * @brief 验证模式枚举、命令字和 CAN FD 帧公共类型已定义。
+ *
+ * 该用例用于锁定后续主机工具与固件共享的协议常量，避免实现过程中出现两端
+ * 对命令字或模式值理解不一致。
+ */
+static void test_shared_canfd_mode_types_exist(void) {
+  Usb2CanFdStandardFrame frame = {0};
+
+  expect_true(kUsb2CanModeCan2Std == 0x00U, "CAN2 标准模式值应固定");
+  expect_true(kUsb2CanModeCanFdStd == 0x01U, "CAN FD 标准模式值应固定");
+  expect_true(kUsb2CanModeCanFdStdBrs == 0x02U,
+              "CAN FD BRS 模式值应固定");
+  expect_true(kUsb2CanCommandGetMode == 0x10U, "GET_MODE 命令字应固定");
+  expect_true(kUsb2CanCommandGetModeResponse == 0x11U,
+              "GET_MODE_RSP 命令字应固定");
+  expect_true(kUsb2CanCommandSetMode == 0x12U, "SET_MODE 命令字应固定");
+  expect_true(kUsb2CanCommandSetModeResponse == 0x13U,
+              "SET_MODE_RSP 命令字应固定");
+  expect_true(kUsb2CanCommandGetCapability == 0x14U,
+              "GET_CAPABILITY 命令字应固定");
+  expect_true(kUsb2CanCommandGetCapabilityResponse == 0x15U,
+              "GET_CAPABILITY_RSP 命令字应固定");
+  expect_true(kUsb2CanCommandCanTx == 0x01U, "CAN2 TX 命令字应保持兼容");
+  expect_true(kUsb2CanCommandCanRxReport == 0x02U,
+              "CAN2 RX 上报命令字应保持兼容");
+  expect_true(kUsb2CanCommandCanFdTx == 0x03U, "CAN FD TX 命令字应固定");
+  expect_true(kUsb2CanCommandCanFdRxReport == 0x04U,
+              "CAN FD RX 上报命令字应固定");
+  expect_true(sizeof(frame.payload) == 64U, "CAN FD 帧最大负载应为 64 字节");
+}
+
+/**
  * @brief 宿主机测试程序入口。
  *
  * @return 全部测试通过时返回 0。
@@ -189,6 +221,7 @@ int main(void) {
   test_protocol_decode_rejects_bad_crc();
   test_bridge_converts_payload_to_can_frame();
   test_bridge_rejects_invalid_dlc();
+  test_shared_canfd_mode_types_exist();
   printf("usb2can protocol tests passed.\n");
   return 0;
 }

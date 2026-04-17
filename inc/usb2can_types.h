@@ -12,6 +12,8 @@
 
 /** @brief USB2CAN 支持的 CAN 数据区最大字节数。 */
 #define USB2CAN_CAN_MAX_PAYLOAD_SIZE 8U
+/** @brief USB2CAN 支持的 CAN FD 数据区最大字节数。 */
+#define USB2CAN_CANFD_MAX_PAYLOAD_SIZE 64U
 
 /** @brief USB2CAN 自定义协议头部固定字节数，不包含 crc16 与 data。 */
 #define USB2CAN_PROTOCOL_HEADER_SIZE 5U
@@ -55,9 +57,37 @@ typedef enum Usb2CanCommand {
   kUsb2CanCommandCanTx = 0x01,
   /** @brief MCU 将收到的一条 CAN 标准帧上报给主机。 */
   kUsb2CanCommandCanRxReport = 0x02,
+  /** @brief 主机请求 MCU 发送一条 CAN FD 标准帧。 */
+  kUsb2CanCommandCanFdTx = 0x03,
+  /** @brief MCU 将收到的一条 CAN FD 标准帧上报给主机。 */
+  kUsb2CanCommandCanFdRxReport = 0x04,
+  /** @brief 主机查询当前活动模式。 */
+  kUsb2CanCommandGetMode = 0x10,
+  /** @brief MCU 回复当前活动模式。 */
+  kUsb2CanCommandGetModeResponse = 0x11,
+  /** @brief 主机请求切换当前活动模式。 */
+  kUsb2CanCommandSetMode = 0x12,
+  /** @brief MCU 回复切换模式的结果。 */
+  kUsb2CanCommandSetModeResponse = 0x13,
+  /** @brief 主机查询固件支持的模式能力。 */
+  kUsb2CanCommandGetCapability = 0x14,
+  /** @brief MCU 回复固件支持的模式能力。 */
+  kUsb2CanCommandGetCapabilityResponse = 0x15,
   /** @brief MCU 上报协议解析、校验或驱动层错误。 */
   kUsb2CanCommandErrorReport = 0x7F,
 } Usb2CanCommand;
+
+/**
+ * @brief 描述 USB2CAN 支持的运行时通信模式。
+ */
+typedef enum Usb2CanMode {
+  /** @brief CAN2.0 标准帧模式。 */
+  kUsb2CanModeCan2Std = 0x00,
+  /** @brief CAN FD 标准帧模式。 */
+  kUsb2CanModeCanFdStd = 0x01,
+  /** @brief CAN FD 标准帧 + BRS 模式。 */
+  kUsb2CanModeCanFdStdBrs = 0x02,
+} Usb2CanMode;
 
 /**
  * @brief USB2CAN 主机可见错误码定义。
@@ -99,6 +129,21 @@ typedef struct Usb2CanStandardFrame {
   /** @brief CAN 数据区，实际使用前 dlc 个字节。 */
   uint8_t payload[USB2CAN_CAN_MAX_PAYLOAD_SIZE];
 } Usb2CanStandardFrame;
+
+/**
+ * @brief 表示一条 CAN FD 标准数据帧。
+ *
+ * 该结构限制为 11-bit 标准 ID，不包含扩展帧、远程帧，仅保留实际数据长度和
+ * 最多 64 字节数据区。
+ */
+typedef struct Usb2CanFdStandardFrame {
+  /** @brief 11-bit 标准帧 ID，仅低 11 位有效。 */
+  uint16_t can_id;
+  /** @brief 实际数据区长度，取值遵循 CAN FD 支持的离散长度集合。 */
+  uint8_t data_length;
+  /** @brief CAN FD 数据区，实际使用前 data_length 个字节。 */
+  uint8_t payload[USB2CAN_CANFD_MAX_PAYLOAD_SIZE];
+} Usb2CanFdStandardFrame;
 
 /**
  * @brief 表示一条完整的 USB2CAN 协议包视图。
