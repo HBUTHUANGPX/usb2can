@@ -15,6 +15,30 @@ different from the previous scheme, so the protocol must treat each scheme as a
 distinct active mode rather than trying to force all traffic into one shared
 payload layout.
 
+## Reference Implementations
+
+The following local examples should be treated as implementation references
+during development:
+
+- `~/HPXLoco_5/hpm/hpm_sdk/samples/drivers/mcan/`
+- `~/HPXLoco_5/hpm/hpm_sdk_extra/demos/cangaroo_hpmicro/`
+
+The most relevant observed reference points are:
+
+- `mcan_demo.c` demonstrates that CAN FD enablement is not just a frame flag;
+  it also requires `can_config.enable_canfd = true` and
+  `mcan_get_default_ram_config(..., true)` before `mcan_init()`
+- `mcan_demo.c` uses `mcan_get_message_size_from_dlc()` when comparing and
+  reading payload sizes, which confirms that DLC translation must not be treated
+  as identical to actual payload length once CAN FD is introduced
+- `cangaroo_hpmicro/protocol/slcan/src/slcan.c` contains
+  `mcan_get_dlc_from_message_size()` and explicit `canfd_frame` /
+  `bitrate_switch` handling, which is a useful reference for our own internal
+  conversion helpers
+- `cangaroo_hpmicro` also keeps receive ISR work small and leaves higher-level
+  processing outside the IRQ path, which matches the current `usb2can`
+  direction
+
 ## Confirmed Product Decisions
 
 - Power-on default mode is `CAN2.0 standard frame`
@@ -295,6 +319,7 @@ Behavioral rules:
 - control commands remain globally valid
 - data commands are validated against current mode
 - inactive-mode traffic results in protocol error reporting
+- mode switch must not leave parsing state and CAN controller state out of sync
 
 ### `src/usb2can_bridge.c`
 
@@ -322,6 +347,17 @@ Needed behavior:
 - expose a controller reconfigure API for mode switch
 - leave active mode unchanged if low-level reconfiguration fails
 - translate controller RX messages into either CAN2 or CAN FD internal frames
+- follow the MCAN sample pattern for enabling FD RAM configuration before init
+
+### `src/usb2can_protocol.c`
+
+The outer transport shell remains unchanged, but implementation must continue to
+preserve these invariants:
+
+- parser remains stream-safe across chunk boundaries
+- parser rejects oversized payloads before copying them into internal buffers
+- control and data commands share the same framing and checksum rules
+- introducing new commands must not change behavior for existing CAN2 frames
 
 ### `src/cdc_acm.c`
 
@@ -355,6 +391,130 @@ Areas likely needing expansion:
 Even though a single CAN FD protocol frame still fits within current 512-byte CDC
 buffers, the internal protocol buffers should be resized intentionally rather
 than relying on incidental headroom.
+
+## Implementation Discipline and Normative Rules
+
+The following rules should be treated as implementation constraints, not just
+style suggestions.
+
+### 1. Keep control plane and data plane separate
+
+- Mode query/switch commands must not share payload formats with CAN data
+  commands
+- Data commands must remain mode-specific after switching
+- Avoid "one payload with optional fields for every mode"; this will make host
+  parsing and firmware validation harder to reason about
+
+### 2. Keep one source of truth for active mode
+
+- Maintain a single runtime `active_mode`
+- Parse and dispatch data commands strictly against that mode
+- Do not infer mode from payload layout, payload length, or frame flags
+
+### 3. Make mode switching atomic from protocol perspective
+
+Recommended order:
+
+1. validate request
+2. compute target CAN configuration
+3. quiesce or pause CAN traffic path
+4. reconfigure MCAN
+5. update `active_mode`
+6. re-enable traffic path
+7. reply success
+
+Failure rule:
+
+- if any low-level step fails, keep the previous mode active and reply failure
+
+### 4. Centralize CAN FD length conversion
+
+CAN FD adds two related but different concepts:
+
+- application-visible payload byte length
+- controller-visible DLC
+
+Rules:
+
+- host protocol should carry byte length, not raw DLC
+- one helper should convert `data_length -> DLC`
+- one helper should convert `DLC -> payload_length`
+- do not duplicate this mapping in multiple modules
+
+This is directly supported by the reference implementations, where controller
+logic uses `mcan_get_message_size_from_dlc()` and cangaroo adds an explicit
+`mcan_get_dlc_from_message_size()`.
+
+### 5. Restrict accepted CAN FD payload sizes deliberately
+
+Recommended accepted lengths:
+
+- `0..8`
+- `12`
+- `16`
+- `20`
+- `24`
+- `32`
+- `48`
+- `64`
+
+Rules:
+
+- reject non-canonical sizes like `9`, `10`, `11`, `13`, `14`, `15`, etc.
+- return a stable protocol error instead of silently rounding
+
+### 6. Do not put blocking or heavy encoding work into ISR
+
+Maintain the current project rule:
+
+- ISR only drains hardware FIFO / records frame / notifies task
+- protocol encode/decode and USB send remain in task context
+
+This is especially important for CAN FD because larger payloads increase the
+cost of copying and encoding.
+
+### 7. Recheck every buffer assumption when adding CAN FD
+
+Any place that currently assumes "CAN payload max 8 bytes" must be audited.
+
+Audit targets include:
+
+- frame structs
+- queue element sizes
+- protocol frame buffers
+- bridge temporary payload buffers
+- CDC send buffers
+- test fixtures and helper constants
+
+### 8. Preserve CAN2 default compatibility
+
+Required compatibility rule:
+
+- with no mode switch command issued, existing CAN2 behavior must remain
+  unchanged from the current firmware contract
+
+### 9. Keep host and firmware enums aligned
+
+Commands, mode ids, error codes, and capability bits must be defined in a way
+that host tools can mirror exactly.
+
+Recommended discipline:
+
+- define mode ids and command ids once in firmware headers
+- mirror them explicitly in host tools and tests
+- document them in `README_zh.md` after implementation
+
+### 10. Separate "mode unsupported" from generic transport failure
+
+When possible, distinguish:
+
+- invalid command
+- inactive-mode packet
+- unsupported mode
+- low-level CAN reconfiguration failure
+- generic I/O failure
+
+This makes host-side debugging much easier during bring-up.
 
 ## Error Handling
 
@@ -413,6 +573,9 @@ The stream parser can stay unchanged because outer framing remains unchanged.
 
 ## Testing Strategy
 
+Testing must cover not only happy-path data transmission but also the mode
+state machine, reconfiguration failure handling, and CAN FD length rules.
+
 ### Firmware Unit Tests
 
 Add tests for:
@@ -422,6 +585,24 @@ Add tests for:
 - mode mismatch rejection
 - invalid CAN FD data length rejection
 - capability response generation
+- CAN FD canonical length acceptance table
+- `data_length -> DLC` conversion
+- `DLC -> data_length` conversion
+- response behavior when mode switch reconfiguration fails
+
+Recommended concrete unit cases:
+
+- `CANFD data_length=0` encodes and decodes successfully
+- `CANFD data_length=8` encodes and decodes successfully
+- `CANFD data_length=12` encodes and decodes successfully
+- `CANFD data_length=64` encodes and decodes successfully
+- `CANFD data_length=9` is rejected
+- `CANFD data_length=15` is rejected
+- `CANFD data_length=63` is rejected
+- `SET_MODE(CAN2_STD)` from `CAN2_STD` is idempotent and succeeds
+- `SET_MODE(CANFD_STD)` updates effective mode only when low-level callback
+  reports success
+- `SET_MODE(unknown_mode)` is rejected without changing current mode
 
 ### Host Tool Tests
 
@@ -431,6 +612,18 @@ Add tests for:
 - `GET_MODE` packet parsing
 - `CAN FD` frame packet construction
 - mode-aware RX report decoding
+- capability response parsing
+- rejection or reporting of inactive-mode responses
+- CAN FD payload length validation before packet emission
+
+Recommended concrete host cases:
+
+- CLI `--mode can2` builds `SET_MODE(CAN2_STD)` or skips switch when requested
+- CLI `--mode canfd` builds `SET_MODE(CANFD_STD)`
+- CLI `--mode canfd-brs` builds `SET_MODE(CANFD_STD_BRS)`
+- sending `64` bytes in CAN FD mode succeeds
+- sending `15` bytes in CAN FD mode fails fast on host side
+- RX parser correctly decodes CAN FD payload lengths from `0`, `12`, and `64`
 
 ### Integration Tests
 
@@ -442,6 +635,77 @@ Verify:
 - successful switch to `CANFD_STD_BRS`
 - inactive-mode data command is rejected after switching
 - mode switch failure preserves previous mode
+
+Recommended integration test content:
+
+- `CAN2 default path`
+  - no mode switch
+  - host sends existing CAN2 packet
+  - bus observes standard CAN2 frame
+  - RX report remains in CAN2 format
+- `CANFD_STD path`
+  - host sends `SET_MODE(CANFD_STD)`
+  - device acknowledges effective mode
+  - host sends standard-id CAN FD frame with `12` bytes payload
+  - bus observes CAN FD frame with `BRS=0`
+  - device RX report uses CAN FD report command and CAN FD payload layout
+- `CANFD_STD_BRS path`
+  - host sends `SET_MODE(CANFD_STD_BRS)`
+  - host sends standard-id CAN FD frame with `64` bytes payload
+  - bus observes CAN FD frame with `BRS=1`
+- `mode mismatch rejection`
+  - switch to `CANFD_STD`
+  - send old `CAN2` data command
+  - device emits error report and does not transmit onto CAN bus
+- `switch rollback`
+  - inject or simulate CAN reconfiguration failure
+  - send `SET_MODE(CANFD_STD)`
+  - device replies failure
+  - follow-up `GET_MODE` still returns previous mode
+
+### Performance and Stress Tests
+
+Because the project already cares about burst behavior, CAN FD support must be
+verified under load instead of only with single-frame manual checks.
+
+Required stress coverage:
+
+- burst CAN FD RX to USB reporting
+- burst USB to CAN FD sending
+- mixed control + data traffic around mode switch boundaries
+- repeated mode switching without reboot
+
+Recommended stress cases:
+
+- send `100` CAN FD frames with `64`-byte payloads from host in `CANFD_STD`
+- send `100` CAN FD BRS frames with `64`-byte payloads in `CANFD_STD_BRS`
+- inject repeated `GET_MODE` while streaming data and ensure no parser drift
+- switch `CAN2 -> CANFD -> CAN2 -> CANFD_BRS` in a loop and verify no stuck
+  state, no silent downgrade, and no queue corruption
+
+### Hardware Bring-Up Checklist
+
+During first board-level bring-up, explicitly confirm:
+
+- MCAN init succeeds in CAN2 mode
+- MCAN re-init succeeds in CAN FD mode
+- MCAN re-init succeeds in CAN FD BRS mode
+- correct nominal bitrate is applied
+- correct data bitrate is applied for FD/BRS modes
+- standard ID filter path still works
+- RX FIFO drain logic still empties FIFO under CAN FD burst traffic
+- USB report path does not truncate 64-byte payloads
+
+### Regression Guardrails
+
+The following existing behaviors must be re-run before claiming completion:
+
+- current Python unit tests for `send_can_test.py`
+- current Python unit tests for `recv_can_test.py`
+- existing CAN2 functional path from host to device
+- existing CAN2 functional path from device to host
+
+No CAN FD work should be considered complete if CAN2 default behavior regresses.
 
 ## Migration Strategy
 
