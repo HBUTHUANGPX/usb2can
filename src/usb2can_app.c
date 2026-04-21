@@ -557,6 +557,7 @@ static void usb2can_app_usb_tx_task(void* parameter) {
   size_t payload_length = 0U;
   size_t output_length = 0U;
   uint32_t last_overflow_count = 0U;
+  uint32_t rx_forward_count = 0U;
   bool did_work = false;
 
   (void)parameter;
@@ -662,6 +663,14 @@ static void usb2can_app_usb_tx_task(void* parameter) {
         continue;
       }
       packet.len = (uint16_t)payload_length;
+      rx_forward_count++;
+      if (rx_forward_count <= 8U || (rx_forward_count % 1000U) == 0U) {
+        printf("[usb2can][usb-tx-task] rx forward count=%lu mode=%u ext=%u "
+               "id=0x%08lX len=%u cmd=0x%02X\n",
+               (unsigned long)rx_forward_count, (unsigned int)frame.mode,
+               frame.is_extended_id ? 1U : 0U, (unsigned long)frame.can_id,
+               (unsigned int)frame.data_length, (unsigned int)packet.cmd);
+      }
 
       if (usb2can_protocol_encode(&packet, g_usb2can_tx_frame_buffer,
                                   sizeof(g_usb2can_tx_frame_buffer),

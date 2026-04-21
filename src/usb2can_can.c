@@ -127,8 +127,9 @@ static Usb2CanStatus usb2can_can_prepare_mcan_config(Usb2CanMode mode,
   mcan_config->can20_samplepoint_max =
       g_usb2can_can_config.samplepoint_per_mille;
   mcan_config->interrupt_mask =
-      MCAN_EVENT_RECEIVE | MCAN_INT_RXFIFO0_FULL |
-      MCAN_INT_RXFIFO0_MSG_LOST | MCAN_INT_RXFIFO0_WMK_REACHED |
+      MCAN_EVENT_RECEIVE | MCAN_INT_RXFIFO0_NEW_MSG |
+      MCAN_INT_RXFIFO0_FULL | MCAN_INT_RXFIFO0_MSG_LOST |
+      MCAN_INT_RXFIFO0_WMK_REACHED | MCAN_INT_RXFIFO1_NEW_MSG |
       MCAN_INT_RXFIFO1_FULL | MCAN_INT_RXFIFO1_MSG_LOST |
       MCAN_INT_RXFIFO1_WMK_REACHED;
   mcan_config->txbuf_trans_interrupt_mask = 0U;
@@ -204,7 +205,7 @@ static Usb2CanStatus usb2can_can_apply_mode(Usb2CanMode mode) {
 /**
  * @brief MCAN 中断服务函数。
  *
- * 当前中断处理保持极简：只读取 RXFIFO0 的新报文并立即回调上层桥接逻辑。
+ * 当前中断处理保持极简：读取 RXFIFO0/RXFIFO1 的新报文并立即回调上层桥接逻辑。
  *
  * @return 无返回值。
  */
@@ -262,11 +263,20 @@ void usb2can_can_isr(void) {
   }
   if ((flags & fifo1_flags) != 0U) {
     while (MCAN_RXF1S_F1FL_GET(BOARD_APP_CAN_BASE->RXF1S) > 0U) {
+      Usb2CanBusFrame frame;
+
       if (mcan_read_rxfifo(BOARD_APP_CAN_BASE, 1U,
                            (mcan_rx_message_t*)&g_usb2can_last_rx_message) !=
           status_success) {
         printf("[usb2can][can-isr] read rxfifo1 failed\n");
         break;
+      }
+      usb2can_can_convert_rx_message(
+          (const mcan_rx_message_t*)&g_usb2can_last_rx_message, &frame);
+      if (g_usb2can_can_rx_callback != NULL) {
+        g_usb2can_can_rx_callback(&frame);
+      } else {
+        printf("[usb2can][can-isr] rx callback is null\n");
       }
     }
   }

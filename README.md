@@ -415,7 +415,12 @@ Current key firmware logs include:
 
 ### RX forwarding filter logs
 
+- `[usb2can][usb-tx-task] rx forward count=... mode=... ext=... id=... len=... cmd=...`
 - `[usb2can][usb-tx-task] drop rx frame mode=... active=...`
+
+`rx forward` means the firmware has received a CAN bus frame and is about to
+report it to the host over USB CDC. To avoid excessive stress-test logging, it
+prints only the first 8 frames and then every 1000th frame.
 
 ### Send failure logs
 

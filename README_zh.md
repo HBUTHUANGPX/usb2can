@@ -418,7 +418,11 @@ python tools/recv_can_test.py --port /dev/ttyACM0
 
 ### 回传过滤日志
 
+- `[usb2can][usb-tx-task] rx forward count=... mode=... ext=... id=... len=... cmd=...`
 - `[usb2can][usb-tx-task] drop rx frame mode=... active=...`
+
+`rx forward` 表示固件已经从 CAN 总线收到帧，并准备通过 USB CDC 回传给主机；
+为避免压测刷屏，只打印前 8 帧以及之后每 1000 帧。
 
 ### 发送失败日志
 
