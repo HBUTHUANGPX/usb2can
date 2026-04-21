@@ -210,8 +210,13 @@ python -u tools/recv_can_test.py --port /dev/ttyACM0
 CAN FD 模式启动日志中应出现 `rxfifo0=28 rxfifo1=0 rxbuf=0 txfifo=4`，
 表示固件已使用接收优先的 MCAN message RAM 布局。需要注意：RXFIFO 深度只是
 短 burst 的缓冲余量，不能作为解决首轮接收丢帧的手段。固件在同模式
-`set-mode` 时会重新武装接收路径，清理 MCAN 接收挂起状态，若发现残留状态会
-打印 `rx path rearmed`。
+`set-mode` 时会重新武装接收路径，清理 MCAN 挂起状态，若发现残留状态会打印
+`rx path rearmed`。若日志中只看到 `flags_cleared=0x00000800`，这是清理
+`TFE/TX FIFO Empty`，不是 RXBUF 或扩展帧接收异常。
+
+固件的 MCAN ISR 采用“入口先清中断快照，再 drain RXFIFO”的顺序，避免 ISR
+末尾误清执行期间新产生的 `RXFIFO0_NEW_MSG`，这是首轮无间隔 burst 能否持续
+触发接收中断的关键点。
 
 若使用无间隔 burst 测试，仍建议从 100 帧开始观察，再逐步提高帧数。测试前可
 先执行一次同模式切换，确认接收路径已进入干净状态：

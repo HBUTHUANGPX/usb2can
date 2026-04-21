@@ -327,21 +327,29 @@ mtval: 0xfffffff9
 
 - 该问题不是 RXFIFO 容量不足。容量变化只会改变第一次能缓存的帧数，不会解释
   “第二次发送正常”。
-- 更符合的根因是：同模式 reconfigure 直接 skip，未清理前序压测留下的 MCAN
-  接收挂起状态，导致第一次 burst 未及时由 `RXFIFO0_NEW_MSG` 路径唤醒，直到
-  FIFO full/lost 后才进入 ISR drain。
+- 2026-04-21 复测日志中的 `0x00000800` 在 HPM5361/HPM5300 MCAN IR 中是
+  `TFE/TX FIFO Empty`，不是 `DRX/RXBUF`。它说明存在陈旧 TX 状态位，但不是
+  接收 FIFO 丢帧的根因。
+- 更符合的根因是 ISR 清中断时序：旧实现先 drain RXFIFO，最后再清理入口时读到的
+  `flags`。如果 ISR drain 期间又有新帧写入 FIFO，新产生的 `RF0N/RXFIFO0_NEW_MSG`
+  可能被 ISR 末尾用旧快照误清，后续 FIFO 中已有数据但不会再由 new-message
+  中断唤醒，只能等到 FIFO full/lost 后再次进入 ISR。
 
 处理：
 
 - 将 ISR 中 RXFIFO0/RXFIFO1 的 drain 逻辑抽为共用函数。
+- ISR 改为入口先清理本次中断快照，再 drain RXFIFO：
+  - 本次已发生的事件仍按入口 `flags` 处理。
+  - ISR 执行期间新到的 `RF0N` 不会被末尾清标志误伤，可继续触发下一轮中断。
 - 同模式 reconfigure 不再完全空操作，而是执行 `rx path rearm`：
-  - 读取并 drain 当前 RXFIFO0/RXFIFO1。
-  - 清理接收相关的 MCAN IR 挂起位。
+  - 读取并丢弃当前 RXFIFO0/RXFIFO1 中的残留帧，不从任务上下文调用 ISR 回调。
+  - 清理当前 MCAN IR 挂起位，包括可能残留的 `TFE`。
   - 仅在发现残留 flags/FIFO 时打印诊断日志。
 
 期望验证：
 
 - 复现路径中执行 `python tools/send_can_test.py --mode canfd-brs --set-mode-only --read-response`
-  后，若存在残留状态，应看到 `rx path rearmed`。
+  后，若存在残留状态，应看到 `rx path rearmed`。如果只剩 `0x00000800`，这是
+  清理陈旧 `TFE`，不代表 RXBUF 接收路径异常。
 - 随后的第一轮 CAN 分析仪 100 帧无间隔扩展帧接收，不应再出现只收到 FIFO 深度
   附近帧数的现象。

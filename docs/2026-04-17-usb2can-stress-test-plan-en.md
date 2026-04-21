@@ -212,8 +212,15 @@ In CAN FD / CAN FD BRS mode, the board startup log should include
 `rxfifo0=28 rxfifo1=0 rxbuf=0 txfifo=4`. This confirms the receive-priority
 message RAM layout is active. Note that RXFIFO depth is only burst headroom;
 it is not the fix for first-burst receive loss. On same-mode `set-mode`, the
-firmware rearms the receive path and clears pending MCAN receive state. If it
-finds stale state, it prints `rx path rearmed`.
+firmware rearms the receive path and clears pending MCAN state. If it finds
+stale state, it prints `rx path rearmed`. If the log only shows
+`flags_cleared=0x00000800`, that is stale `TFE/TX FIFO Empty`; it does not
+indicate an RXBUF or extended-frame receive problem.
+
+The MCAN ISR clears the interrupt snapshot at ISR entry and then drains RXFIFO.
+This prevents the ISR from accidentally clearing a new `RXFIFO0_NEW_MSG`
+generated while it is draining the FIFO, which is the key timing requirement
+for the first zero-interval burst.
 
 For zero-interval analyzer bursts, start with 100 frames, then increase
 gradually after confirming there is no `rxfifo0 full` or `rxfifo0 lost` log.

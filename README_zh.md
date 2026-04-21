@@ -413,6 +413,10 @@ conda run --no-capture-output -n usb2can python -u tools/recv_can_test.py --port
 - `[usb2can][can] rx path rearmed reason=... flags_before=... flags_cleared=... fifo0_before=... fifo1_before=... drained0=... drained1=...`
 - `[usb2can][can] reconfigure skipped mode=... unchanged rx_rearmed=1`
 
+`flags_cleared=0x00000800` 表示清理了 MCAN 的 `TFE/TX FIFO Empty` 陈旧状态，
+不是 RXBUF 或 CANFD 扩展帧接收异常。CAN 接收 ISR 会在入口先清本次中断快照，
+再搬空 RXFIFO，避免在 ISR 末尾误清执行期间新产生的 `RXFIFO0_NEW_MSG`。
+
 ### App 层模式切换日志
 
 - `[usb2can][app] active mode switched to ...`

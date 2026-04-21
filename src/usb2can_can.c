@@ -38,6 +38,9 @@ static volatile uint32_t g_usb2can_can_rxfifo1_lost_count = 0U;
   (USB2CAN_CAN_RXFIFO0_FLAGS | USB2CAN_CAN_RXFIFO1_FLAGS | \
    MCAN_INT_MSG_STORE_TO_RXBUF)
 
+#define USB2CAN_CAN_KNOWN_ISR_FLAGS \
+  (USB2CAN_CAN_RX_REARM_FLAGS | MCAN_INT_TXFIFO_EMPTY)
+
 #if defined(MCAN_SOC_MSG_BUF_IN_AHB_RAM) && (MCAN_SOC_MSG_BUF_IN_AHB_RAM == 1)
 /**
  * @brief MCAN 消息 RAM 缓冲区。
@@ -124,7 +127,8 @@ static uint32_t usb2can_can_get_rxfifo_fill_level(uint32_t fifo_index) {
   return MCAN_RXF1S_F1FL_GET(BOARD_APP_CAN_BASE->RXF1S);
 }
 
-static uint32_t usb2can_can_drain_rxfifo(uint32_t fifo_index) {
+static uint32_t usb2can_can_drain_rxfifo(uint32_t fifo_index,
+                                         bool forward_to_usb) {
   uint32_t drained_count = 0U;
 
   while (usb2can_can_get_rxfifo_fill_level(fifo_index) > 0U) {
@@ -137,12 +141,14 @@ static uint32_t usb2can_can_drain_rxfifo(uint32_t fifo_index) {
              (unsigned long)fifo_index);
       break;
     }
-    usb2can_can_convert_rx_message(
-        (const mcan_rx_message_t*)&g_usb2can_last_rx_message, &frame);
-    if (g_usb2can_can_rx_callback != NULL) {
-      g_usb2can_can_rx_callback(&frame);
-    } else {
-      printf("[usb2can][can] rx callback is null\n");
+    if (forward_to_usb) {
+      usb2can_can_convert_rx_message(
+          (const mcan_rx_message_t*)&g_usb2can_last_rx_message, &frame);
+      if (g_usb2can_can_rx_callback != NULL) {
+        g_usb2can_can_rx_callback(&frame);
+      } else {
+        printf("[usb2can][can] rx callback is null\n");
+      }
     }
     drained_count++;
   }
@@ -156,11 +162,9 @@ static void usb2can_can_rearm_rx_path(const char* reason) {
       usb2can_can_get_rxfifo_fill_level(0U);
   const uint32_t before_fifo1 =
       usb2can_can_get_rxfifo_fill_level(1U);
-  const uint32_t drained_fifo0 = usb2can_can_drain_rxfifo(0U);
-  const uint32_t drained_fifo1 = usb2can_can_drain_rxfifo(1U);
-  const uint32_t clear_flags =
-      mcan_get_interrupt_flags(BOARD_APP_CAN_BASE) &
-      USB2CAN_CAN_RX_REARM_FLAGS;
+  const uint32_t drained_fifo0 = usb2can_can_drain_rxfifo(0U, false);
+  const uint32_t drained_fifo1 = usb2can_can_drain_rxfifo(1U, false);
+  const uint32_t clear_flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
 
   if (clear_flags != 0U) {
     mcan_clear_interrupt_flags(BOARD_APP_CAN_BASE, clear_flags);
@@ -336,6 +340,17 @@ SDK_DECLARE_EXT_ISR_M(BOARD_APP_CAN_IRQn, usb2can_can_isr)
 void usb2can_can_isr(void) {
   uint32_t flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
 
+  if (flags == 0U) {
+    return;
+  }
+
+  /*
+   * Clear the interrupt snapshot before draining RX FIFO. If we clear this
+   * snapshot at ISR exit, an RF0N generated while the ISR is draining can be
+   * cleared accidentally, leaving later frames stuck until FIFO full/lost.
+   */
+  mcan_clear_interrupt_flags(BOARD_APP_CAN_BASE, flags);
+
   if ((flags & MCAN_INT_RXFIFO0_FULL) != 0U) {
     g_usb2can_can_rxfifo0_full_count++;
     printf("[usb2can][can-isr] rxfifo0 full count=%lu\n",
@@ -347,7 +362,7 @@ void usb2can_can_isr(void) {
            (unsigned long)g_usb2can_can_rxfifo0_lost_count);
   }
   if ((flags & USB2CAN_CAN_RXFIFO0_FLAGS) != 0U) {
-    (void)usb2can_can_drain_rxfifo(0U);
+    (void)usb2can_can_drain_rxfifo(0U, true);
   }
 
   if ((flags & MCAN_INT_RXFIFO1_FULL) != 0U) {
@@ -361,18 +376,16 @@ void usb2can_can_isr(void) {
            (unsigned long)g_usb2can_can_rxfifo1_lost_count);
   }
   if ((flags & USB2CAN_CAN_RXFIFO1_FLAGS) != 0U) {
-    (void)usb2can_can_drain_rxfifo(1U);
+    (void)usb2can_can_drain_rxfifo(1U, true);
   }
   if ((flags & MCAN_INT_MSG_STORE_TO_RXBUF) != 0U) {
     printf("[usb2can][can-isr] rx buffer store flag set flags=0x%08lX\n",
            (unsigned long)flags);
   }
-  if ((flags & ~USB2CAN_CAN_RX_REARM_FLAGS) != 0U) {
+  if ((flags & ~USB2CAN_CAN_KNOWN_ISR_FLAGS) != 0U) {
     printf("[usb2can][can-isr] other flags=0x%08lX\n",
-           (unsigned long)(flags & ~USB2CAN_CAN_RX_REARM_FLAGS));
+           (unsigned long)(flags & ~USB2CAN_CAN_KNOWN_ISR_FLAGS));
   }
-
-  mcan_clear_interrupt_flags(BOARD_APP_CAN_BASE, flags);
 }
 
 /**

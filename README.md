@@ -411,6 +411,12 @@ Current key firmware logs include:
 - `[usb2can][can] rx path rearmed reason=... flags_before=... flags_cleared=... fifo0_before=... fifo1_before=... drained0=... drained1=...`
 - `[usb2can][can] reconfigure skipped mode=... unchanged rx_rearmed=1`
 
+`flags_cleared=0x00000800` means stale MCAN `TFE/TX FIFO Empty` was cleared;
+it is not an RXBUF or CAN FD extended-frame receive fault. The CAN RX ISR
+clears the interrupt snapshot at ISR entry and then drains RXFIFO, so it does
+not accidentally clear a new `RXFIFO0_NEW_MSG` generated while the ISR is
+running.
+
 ### App-level mode switch logs
 
 - `[usb2can][app] active mode switched to ...`
