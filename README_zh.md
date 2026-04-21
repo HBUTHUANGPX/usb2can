@@ -23,13 +23,16 @@
 
 ## 集中配置项
 
-与协议和链路相关的集中配置位于 [usb2can_config.h](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/inc/usb2can_config.h)。
+与协议和链路相关的集中配置位于 [usb2can_config.h](inc/usb2can_config.h)。
 
 当前默认值包括：
 
 - 协议帧头：`0xA5`
+- 上电默认模式：`CANFD_STD_BRS`
 - CAN 仲裁相位波特率：`1000000 bps`
-- CAN FD 数据相位波特率：`2000000 bps`
+- CAN 仲裁相位采样点：`80%`
+- CAN FD 数据相位波特率：`5000000 bps`
+- CAN FD 数据相位采样点：`75%`
 - USB 总线编号：`0`
 - CDC IN 端点：`0x81`
 - CDC OUT 端点：`0x01`
@@ -38,16 +41,16 @@
 
 ## 默认行为
 
-- 设备上电默认进入 `CAN2_STD`
+- 设备上电默认进入 `CANFD_STD_BRS`
 - 模式切换通过 CDC 私有协议中的控制命令完成
-- 模式切换不持久化，设备重启后恢复 `CAN2_STD`
+- 模式切换不持久化，设备重启后恢复 `CANFD_STD_BRS`
 - 切换成功后，设备只接受当前活动模式对应的数据命令
 
 ## 压测入口
 
 - 主机侧自动压测脚本：`python tools/run_stress_test.py --dry-run`
-- 中文压测方案与执行记录：[docs/2026-04-17-usb2can-stress-test-plan.md](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/docs/2026-04-17-usb2can-stress-test-plan.md)
-- English stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan-en.md](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/docs/2026-04-17-usb2can-stress-test-plan-en.md)
+- 中文压测方案与执行记录：[docs/2026-04-17-usb2can-stress-test-plan.md](docs/2026-04-17-usb2can-stress-test-plan.md)
+- English stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan-en.md](docs/2026-04-17-usb2can-stress-test-plan-en.md)
 
 ## 线协议格式
 
@@ -86,7 +89,7 @@ USB 线上一条完整协议帧的字节布局如下：
 
 ## 模式定义
 
-模式定义位于 [usb2can_types.h](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/inc/usb2can_types.h)。
+模式定义位于 [usb2can_types.h](inc/usb2can_types.h)。
 
 | 模式值 | 名称 | 含义 |
 |---|---|---|
@@ -96,7 +99,7 @@ USB 线上一条完整协议帧的字节布局如下：
 
 ## 命令字定义
 
-命令字定义位于 [usb2can_types.h](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/inc/usb2can_types.h)。
+命令字定义位于 [usb2can_types.h](inc/usb2can_types.h)。
 
 ### 控制平面命令
 
@@ -243,7 +246,7 @@ USB 线上一条完整协议帧的字节布局如下：
 
 ## 错误码定义
 
-错误码定义位于 [usb2can_types.h](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/inc/usb2can_types.h) 中的 `Usb2CanErrorCode`。
+错误码定义位于 [usb2can_types.h](inc/usb2can_types.h) 中的 `Usb2CanErrorCode`。
 
 当设备发送 `CMD_ERROR_REPORT` 时：
 
@@ -263,7 +266,7 @@ USB 线上一条完整协议帧的字节布局如下：
 
 ## 模式切换规则
 
-- 上电默认模式为 `CAN2_STD`
+- 上电默认模式为 `CANFD_STD_BRS`
 - 控制命令在任何模式下都可以发送
 - `SET_MODE` 成功后，设备立即切换到新模式
 - 切换成功后，旧模式数据命令会被拒绝
@@ -273,8 +276,8 @@ USB 线上一条完整协议帧的字节布局如下：
 
 当前主机工具：
 
-- [send_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/tools/send_can_test.py)
-- [recv_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/tools/recv_can_test.py)
+- [send_can_test.py](tools/send_can_test.py)
+- [recv_can_test.py](tools/recv_can_test.py)
 
 ### 常用命令
 
@@ -320,8 +323,8 @@ python tools/recv_can_test.py --port /dev/ttyACM0
 
 ### 模式与 MCAN 配置日志
 
-- `[usb2can][can] init requested mode=...`
-- `[usb2can][can] active mode=... baud=... baud_fd=... canfd=...`
+- `[usb2can][can] init requested mode=... baud=... sp=... baud_fd=... sp_fd=...`
+- `[usb2can][can] active mode=... baud=... sp=... baud_fd=... sp_fd=... canfd=...`
 - `[usb2can][can] reconfigure begin old=... new=...`
 
 ### App 层模式切换日志
@@ -345,10 +348,10 @@ python tools/recv_can_test.py --port /dev/ttyACM0
 
 ## 当前实现文件
 
-- 顶层编排：[usb2can_app.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/usb2can_app.c)
-- 协议层：[usb2can_protocol.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/usb2can_protocol.c)
-- 桥接层：[usb2can_bridge.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/usb2can_bridge.c)
-- CAN 适配层：[usb2can_can.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/usb2can_can.c)
-- USB CDC 适配层：[cdc_acm.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/cdc_acm.c)
-- 主机发送工具：[send_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/tools/send_can_test.py)
-- 主机接收工具：[recv_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/tools/recv_can_test.py)
+- 顶层编排：[usb2can_app.c](src/usb2can_app.c)
+- 协议层：[usb2can_protocol.c](src/usb2can_protocol.c)
+- 桥接层：[usb2can_bridge.c](src/usb2can_bridge.c)
+- CAN 适配层：[usb2can_can.c](src/usb2can_can.c)
+- USB CDC 适配层：[cdc_acm.c](src/cdc_acm.c)
+- 主机发送工具：[send_can_test.py](tools/send_can_test.py)
+- 主机接收工具：[recv_can_test.py](tools/recv_can_test.py)

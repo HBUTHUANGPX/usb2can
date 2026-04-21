@@ -13,10 +13,14 @@
  * @brief MCAN 适配层的初始化配置。
  */
 typedef struct Usb2CanCanConfig {
-  /** @brief 经典 CAN 的目标波特率，单位为 bit/s。 */
+  /** @brief CAN 仲裁相位目标波特率，单位为 bit/s。 */
   uint32_t baudrate;
+  /** @brief CAN 仲裁相位目标采样点，单位为千分比。 */
+  uint16_t samplepoint_per_mille;
   /** @brief CAN FD 数据相位波特率，单位为 bit/s。 */
   uint32_t baudrate_fd;
+  /** @brief CAN FD 数据相位目标采样点，单位为千分比。 */
+  uint16_t samplepoint_fd_per_mille;
   /** @brief 初始活动模式。 */
   Usb2CanMode initial_mode;
 } Usb2CanCanConfig;

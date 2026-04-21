@@ -164,7 +164,7 @@ static TaskHandle_t g_usb2can_usb_tx_task_handle = NULL;
 /** @brief CAN 发送任务句柄。 */
 static TaskHandle_t g_usb2can_can_tx_task_handle = NULL;
 /** @brief 当前活动模式。 */
-static Usb2CanMode g_usb2can_active_mode = kUsb2CanModeCan2Std;
+static Usb2CanMode g_usb2can_active_mode = USB2CAN_CONFIG_DEFAULT_MODE;
 
 /**
  * @brief 从 ISR 向 CAN RX 环形缓冲区压入一帧。
@@ -699,7 +699,7 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
   }
 
   g_usb2can_app_config = *config;
-  g_usb2can_active_mode = kUsb2CanModeCan2Std;
+  g_usb2can_active_mode = config->initial_mode;
   g_usb2can_usb_rx_queue = xQueueCreate(USB2CAN_APP_USB_RX_QUEUE_LENGTH,
                                         sizeof(Usb2CanUsbRxChunk));
   if (g_usb2can_usb_rx_queue == NULL) {
@@ -742,11 +742,21 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
     return kUsb2CanStatusIoError;
   }
   can_config.baudrate = g_usb2can_app_config.can_baudrate;
-  can_config.baudrate_fd = USB2CAN_CONFIG_CANFD_DATA_BAUDRATE;
+  can_config.samplepoint_per_mille =
+      g_usb2can_app_config.can_samplepoint_per_mille;
+  can_config.baudrate_fd = g_usb2can_app_config.canfd_data_baudrate;
+  can_config.samplepoint_fd_per_mille =
+      g_usb2can_app_config.canfd_data_samplepoint_per_mille;
   can_config.initial_mode = g_usb2can_active_mode;
-  printf("[usb2can][app] init protocol_head=0x%02X can_baudrate=%lu\n",
+  printf("[usb2can][app] init protocol_head=0x%02X mode=%u "
+         "can_baudrate=%lu can_sp=%u canfd_data_baudrate=%lu "
+         "canfd_data_sp=%u\n",
          g_usb2can_app_config.protocol_head,
-         (unsigned long)g_usb2can_app_config.can_baudrate);
+         (unsigned int)g_usb2can_app_config.initial_mode,
+         (unsigned long)g_usb2can_app_config.can_baudrate,
+         (unsigned int)g_usb2can_app_config.can_samplepoint_per_mille,
+         (unsigned long)g_usb2can_app_config.canfd_data_baudrate,
+         (unsigned int)g_usb2can_app_config.canfd_data_samplepoint_per_mille);
   if (usb2can_can_init(&can_config, usb2can_app_on_can_rx) !=
       kUsb2CanStatusOk) {
     printf("usb2can can init failed.\n");
@@ -766,6 +776,11 @@ Usb2CanAppConfig usb2can_app_get_default_config(void) {
 
   config.protocol_head = USB2CAN_CONFIG_PROTOCOL_HEAD;
   config.can_baudrate = USB2CAN_CONFIG_CAN_BAUDRATE;
+  config.can_samplepoint_per_mille = USB2CAN_CONFIG_CAN_SAMPLEPOINT_PERMILLE;
+  config.canfd_data_baudrate = USB2CAN_CONFIG_CANFD_DATA_BAUDRATE;
+  config.canfd_data_samplepoint_per_mille =
+      USB2CAN_CONFIG_CANFD_DATA_SAMPLEPOINT_PERMILLE;
+  config.initial_mode = USB2CAN_CONFIG_DEFAULT_MODE;
   return config;
 }
 

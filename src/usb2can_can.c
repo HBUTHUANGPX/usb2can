@@ -89,6 +89,10 @@ static Usb2CanStatus usb2can_can_prepare_mcan_config(Usb2CanMode mode,
 
   mcan_get_default_config(BOARD_APP_CAN_BASE, mcan_config);
   mcan_config->baudrate = g_usb2can_can_config.baudrate;
+  mcan_config->can20_samplepoint_min =
+      g_usb2can_can_config.samplepoint_per_mille;
+  mcan_config->can20_samplepoint_max =
+      g_usb2can_can_config.samplepoint_per_mille;
   mcan_config->interrupt_mask =
       MCAN_EVENT_RECEIVE | MCAN_INT_RXFIFO0_FULL |
       MCAN_INT_RXFIFO0_MSG_LOST | MCAN_INT_RXFIFO0_WMK_REACHED |
@@ -101,6 +105,10 @@ static Usb2CanStatus usb2can_can_prepare_mcan_config(Usb2CanMode mode,
   if (mode == kUsb2CanModeCanFdStd || mode == kUsb2CanModeCanFdStdBrs) {
     mcan_config->enable_canfd = true;
     mcan_config->baudrate_fd = g_usb2can_can_config.baudrate_fd;
+    mcan_config->canfd_samplepoint_min =
+        g_usb2can_can_config.samplepoint_fd_per_mille;
+    mcan_config->canfd_samplepoint_max =
+        g_usb2can_can_config.samplepoint_fd_per_mille;
     mcan_get_default_ram_config(BOARD_APP_CAN_BASE, &mcan_config->ram_config,
                                 true);
   }
@@ -128,17 +136,23 @@ static Usb2CanStatus usb2can_can_apply_mode(Usb2CanMode mode) {
   intc_m_disable_irq(BOARD_APP_CAN_IRQn);
   mcan_deinit(BOARD_APP_CAN_BASE);
   if (mcan_init(BOARD_APP_CAN_BASE, &mcan_config, can_clock) != status_success) {
-    printf("[usb2can][can] mcan_init failed mode=%u baud=%lu baud_fd=%lu\n",
+    printf("[usb2can][can] mcan_init failed mode=%u baud=%lu sp=%u "
+           "baud_fd=%lu sp_fd=%u\n",
            (unsigned int)mode, (unsigned long)mcan_config.baudrate,
-           (unsigned long)mcan_config.baudrate_fd);
+           (unsigned int)mcan_config.can20_samplepoint_min,
+           (unsigned long)mcan_config.baudrate_fd,
+           (unsigned int)mcan_config.canfd_samplepoint_min);
     return kUsb2CanStatusIoError;
   }
 
   intc_m_enable_irq_with_priority(BOARD_APP_CAN_IRQn, 1);
   g_usb2can_can_mode = mode;
-  printf("[usb2can][can] active mode=%u baud=%lu baud_fd=%lu canfd=%d\n",
+  printf("[usb2can][can] active mode=%u baud=%lu sp=%u baud_fd=%lu "
+         "sp_fd=%u canfd=%d\n",
          (unsigned int)mode, (unsigned long)mcan_config.baudrate,
+         (unsigned int)mcan_config.can20_samplepoint_min,
          (unsigned long)mcan_config.baudrate_fd,
+         (unsigned int)mcan_config.canfd_samplepoint_min,
          mcan_config.enable_canfd ? 1 : 0);
   return kUsb2CanStatusOk;
 }
@@ -240,9 +254,12 @@ Usb2CanStatus usb2can_can_init(const Usb2CanCanConfig* config,
   g_usb2can_can_config = *config;
   g_usb2can_can_mode = config->initial_mode;
 
-  printf("[usb2can][can] init requested mode=%u baud=%lu baud_fd=%lu\n",
+  printf("[usb2can][can] init requested mode=%u baud=%lu sp=%u "
+         "baud_fd=%lu sp_fd=%u\n",
          (unsigned int)config->initial_mode, (unsigned long)config->baudrate,
-         (unsigned long)config->baudrate_fd);
+         (unsigned int)config->samplepoint_per_mille,
+         (unsigned long)config->baudrate_fd,
+         (unsigned int)config->samplepoint_fd_per_mille);
 
 #if defined(MCAN_SOC_MSG_BUF_IN_AHB_RAM) && (MCAN_SOC_MSG_BUF_IN_AHB_RAM == 1)
   {

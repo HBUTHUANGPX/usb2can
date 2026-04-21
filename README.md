@@ -25,14 +25,16 @@ Current scope:
 
 ## Central Configuration
 
-Central protocol and link configuration lives in
-[usb2can_config.h](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/inc/usb2can_config.h).
+Central protocol and link configuration lives in [usb2can_config.h](inc/usb2can_config.h).
 
 Default values include:
 
 - protocol head: `0xA5`
-- CAN nominal bitrate: `1000000 bps`
-- CAN FD data bitrate: `2000000 bps`
+- power-on mode: `CANFD_STD_BRS`
+- CAN nominal/arbitration bitrate: `1000000 bps`
+- CAN nominal/arbitration sample point: `80%`
+- CAN FD data bitrate: `5000000 bps`
+- CAN FD data sample point: `75%`
 - USB bus id: `0`
 - CDC IN endpoint: `0x81`
 - CDC OUT endpoint: `0x01`
@@ -41,16 +43,16 @@ Default values include:
 
 ## Default Behavior
 
-- Power-on default mode is `CAN2_STD`
+- Power-on default mode is `CANFD_STD_BRS`
 - Mode switching is done through CDC private protocol control commands
 - Selected mode is not persisted
-- After a successful switch, only the new mode's data commands are accepted
+- After a successful switch, only the active mode's data commands are accepted
 
 ## Stress Entry Points
 
 - Host-side stress runner: `python tools/run_stress_test.py --dry-run`
-- Chinese stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan.md](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/docs/2026-04-17-usb2can-stress-test-plan.md)
-- English stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan-en.md](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/docs/2026-04-17-usb2can-stress-test-plan-en.md)
+- Chinese stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan.md](docs/2026-04-17-usb2can-stress-test-plan.md)
+- English stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan-en.md](docs/2026-04-17-usb2can-stress-test-plan-en.md)
 
 ## Wire Format
 
@@ -83,8 +85,7 @@ All 16-bit fields are little-endian:
 
 ## Mode Values
 
-Mode definitions are in
-[usb2can_types.h](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/inc/usb2can_types.h).
+Mode definitions are in [usb2can_types.h](inc/usb2can_types.h).
 
 | Value | Name | Meaning |
 |---|---|---|
@@ -240,8 +241,7 @@ So:
 
 ## Error Codes
 
-Error codes are defined in
-[usb2can_types.h](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/inc/usb2can_types.h).
+Error codes are defined in [usb2can_types.h](inc/usb2can_types.h).
 
 When the device sends `CMD_ERROR_REPORT`:
 
@@ -261,7 +261,7 @@ When the device sends `CMD_ERROR_REPORT`:
 
 ## Mode Switching Rules
 
-- default power-on mode is `CAN2_STD`
+- default power-on mode is `CANFD_STD_BRS`
 - control-plane commands are valid in any mode
 - after `SET_MODE` succeeds, the device immediately switches mode
 - old-mode data commands are rejected after switching
@@ -271,8 +271,8 @@ When the device sends `CMD_ERROR_REPORT`:
 
 Current host tools:
 
-- [send_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/tools/send_can_test.py)
-- [recv_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/tools/recv_can_test.py)
+- [send_can_test.py](tools/send_can_test.py)
+- [recv_can_test.py](tools/recv_can_test.py)
 
 ### Common Commands
 
@@ -318,8 +318,8 @@ Current key firmware logs include:
 
 ### Mode and MCAN configuration logs
 
-- `[usb2can][can] init requested mode=...`
-- `[usb2can][can] active mode=... baud=... baud_fd=... canfd=...`
+- `[usb2can][can] init requested mode=... baud=... sp=... baud_fd=... sp_fd=...`
+- `[usb2can][can] active mode=... baud=... sp=... baud_fd=... sp_fd=... canfd=...`
 - `[usb2can][can] reconfigure begin old=... new=...`
 
 ### App-level mode switch logs
@@ -343,10 +343,10 @@ Current key firmware logs include:
 
 ## Current Implementation Files
 
-- App orchestration: [usb2can_app.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/usb2can_app.c)
-- Protocol layer: [usb2can_protocol.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/usb2can_protocol.c)
-- Bridge layer: [usb2can_bridge.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/usb2can_bridge.c)
-- CAN adapter: [usb2can_can.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/usb2can_can.c)
-- USB CDC adapter: [cdc_acm.c](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/src/cdc_acm.c)
-- Host sender: [send_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/tools/send_can_test.py)
-- Host receiver: [recv_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode/tools/recv_can_test.py)
+- App orchestration: [usb2can_app.c](src/usb2can_app.c)
+- Protocol layer: [usb2can_protocol.c](src/usb2can_protocol.c)
+- Bridge layer: [usb2can_bridge.c](src/usb2can_bridge.c)
+- CAN adapter: [usb2can_can.c](src/usb2can_can.c)
+- USB CDC adapter: [cdc_acm.c](src/cdc_acm.c)
+- Host sender: [send_can_test.py](tools/send_can_test.py)
+- Host receiver: [recv_can_test.py](tools/recv_can_test.py)

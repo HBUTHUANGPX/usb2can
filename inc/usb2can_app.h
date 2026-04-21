@@ -18,8 +18,16 @@
 typedef struct Usb2CanAppConfig {
   /** @brief 设备发送给主机以及主机发送给设备时统一使用的协议帧头。 */
   uint8_t protocol_head;
-  /** @brief CAN2.0 默认波特率，单位为 bit/s。 */
+  /** @brief CAN 仲裁相位默认波特率，单位为 bit/s。 */
   uint32_t can_baudrate;
+  /** @brief CAN 仲裁相位默认采样点，单位为千分比。 */
+  uint16_t can_samplepoint_per_mille;
+  /** @brief CAN FD 数据相位默认波特率，单位为 bit/s。 */
+  uint32_t canfd_data_baudrate;
+  /** @brief CAN FD 数据相位默认采样点，单位为千分比。 */
+  uint16_t canfd_data_samplepoint_per_mille;
+  /** @brief 设备上电后的默认 CAN 通信模式。 */
+  Usb2CanMode initial_mode;
 } Usb2CanAppConfig;
 
 /**

@@ -11,6 +11,8 @@
 
 #include <stdint.h>
 
+#include "usb2can_types.h"
+
 /** @brief 自定义协议帧头。 */
 #define USB2CAN_CONFIG_PROTOCOL_HEAD 0xA5U
 
@@ -38,10 +40,16 @@
 /** @brief 协议发送负载缓冲区大小。 */
 #define USB2CAN_CONFIG_PROTOCOL_TX_PAYLOAD_BUFFER_SIZE 80U
 
-/** @brief CAN2.0 默认波特率。 */
+/** @brief 设备上电后的默认 CAN 通信模式。 */
+#define USB2CAN_CONFIG_DEFAULT_MODE kUsb2CanModeCanFdStdBrs
+/** @brief CAN 仲裁相位默认波特率。 */
 #define USB2CAN_CONFIG_CAN_BAUDRATE 1000000UL
+/** @brief CAN 仲裁相位默认采样点，单位为千分比，800 表示 80%。 */
+#define USB2CAN_CONFIG_CAN_SAMPLEPOINT_PERMILLE 800U
 /** @brief CAN FD 默认数据相位波特率。 */
-#define USB2CAN_CONFIG_CANFD_DATA_BAUDRATE 2000000UL
+#define USB2CAN_CONFIG_CANFD_DATA_BAUDRATE 5000000UL
+/** @brief CAN FD 数据相位默认采样点，单位为千分比，750 表示 75%。 */
+#define USB2CAN_CONFIG_CANFD_DATA_SAMPLEPOINT_PERMILLE 750U
 
 /** @brief USB 设备厂商字符串。 */
 #define USB2CAN_CONFIG_USB_MANUFACTURER_STRING "HPMicro"
