@@ -210,9 +210,20 @@ python -u tools/recv_can_test.py --port /dev/ttyACM0
 
 In CAN FD / CAN FD BRS mode, the board startup log should include
 `rxfifo0=28 rxfifo1=0 rxbuf=0 txfifo=4`. This confirms the receive-priority
-message RAM layout is active. For zero-interval analyzer bursts, start with
-100 frames, then increase gradually after confirming there is no `rxfifo0 full`
-or `rxfifo0 lost` log.
+message RAM layout is active. Note that RXFIFO depth is only burst headroom;
+it is not the fix for first-burst receive loss. On same-mode `set-mode`, the
+firmware rearms the receive path and clears pending MCAN receive state. If it
+finds stale state, it prints `rx path rearmed`.
+
+For zero-interval analyzer bursts, start with 100 frames, then increase
+gradually after confirming there is no `rxfifo0 full` or `rxfifo0 lost` log.
+Before the receive test, run one same-mode switch to make the receive path
+clean:
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --set-mode-only --read-response
+python -u tools/recv_can_test.py --port /dev/ttyACM0
+```
 
 ### 6.1 Classic CAN reporting
 

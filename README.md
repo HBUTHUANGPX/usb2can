@@ -408,7 +408,8 @@ Current key firmware logs include:
 - `[usb2can][can] active mode=... clock=... baud=... sp=... baud_fd=... sp_fd=... canfd=... tdc=... tdco_cfg=... tdcf_cfg=... rxfifo0=... rxfifo1=... rxbuf=... txfifo=... dbtp=... tdcr=...`
 - `[usb2can][can] reconfigure begin old=... new=...`
 - `[usb2can][can] reconfigure recovering bus-off mode=...`
-- `[usb2can][can] reconfigure skipped mode=... unchanged`
+- `[usb2can][can] rx path rearmed reason=... flags_before=... flags_cleared=... fifo0_before=... fifo1_before=... drained0=... drained1=...`
+- `[usb2can][can] reconfigure skipped mode=... unchanged rx_rearmed=1`
 
 ### App-level mode switch logs
 

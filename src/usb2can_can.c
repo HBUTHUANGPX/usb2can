@@ -26,6 +26,18 @@ static volatile uint32_t g_usb2can_can_rxfifo1_full_count = 0U;
 /** @brief RXFIFO1 丢帧计数。 */
 static volatile uint32_t g_usb2can_can_rxfifo1_lost_count = 0U;
 
+#define USB2CAN_CAN_RXFIFO0_FLAGS \
+  (MCAN_INT_RXFIFO0_NEW_MSG | MCAN_INT_RXFIFO0_FULL | \
+   MCAN_INT_RXFIFO0_MSG_LOST | MCAN_INT_RXFIFO0_WMK_REACHED)
+
+#define USB2CAN_CAN_RXFIFO1_FLAGS \
+  (MCAN_INT_RXFIFO1_NEW_MSG | MCAN_INT_RXFIFO1_FULL | \
+   MCAN_INT_RXFIFO1_MSG_LOST | MCAN_INT_RXFIFO1_WMK_REACHED)
+
+#define USB2CAN_CAN_RX_REARM_FLAGS \
+  (USB2CAN_CAN_RXFIFO0_FLAGS | USB2CAN_CAN_RXFIFO1_FLAGS | \
+   MCAN_INT_MSG_STORE_TO_RXBUF)
+
 #if defined(MCAN_SOC_MSG_BUF_IN_AHB_RAM) && (MCAN_SOC_MSG_BUF_IN_AHB_RAM == 1)
 /**
  * @brief MCAN 消息 RAM 缓冲区。
@@ -103,6 +115,67 @@ static void usb2can_can_convert_rx_message(const mcan_rx_message_t* source,
   }
 
   memcpy(target->payload, source->data_8, target->data_length);
+}
+
+static uint32_t usb2can_can_get_rxfifo_fill_level(uint32_t fifo_index) {
+  if (fifo_index == 0U) {
+    return MCAN_RXF0S_F0FL_GET(BOARD_APP_CAN_BASE->RXF0S);
+  }
+  return MCAN_RXF1S_F1FL_GET(BOARD_APP_CAN_BASE->RXF1S);
+}
+
+static uint32_t usb2can_can_drain_rxfifo(uint32_t fifo_index) {
+  uint32_t drained_count = 0U;
+
+  while (usb2can_can_get_rxfifo_fill_level(fifo_index) > 0U) {
+    Usb2CanBusFrame frame;
+
+    if (mcan_read_rxfifo(BOARD_APP_CAN_BASE, fifo_index,
+                         (mcan_rx_message_t*)&g_usb2can_last_rx_message) !=
+        status_success) {
+      printf("[usb2can][can] read rxfifo%lu failed\n",
+             (unsigned long)fifo_index);
+      break;
+    }
+    usb2can_can_convert_rx_message(
+        (const mcan_rx_message_t*)&g_usb2can_last_rx_message, &frame);
+    if (g_usb2can_can_rx_callback != NULL) {
+      g_usb2can_can_rx_callback(&frame);
+    } else {
+      printf("[usb2can][can] rx callback is null\n");
+    }
+    drained_count++;
+  }
+
+  return drained_count;
+}
+
+static void usb2can_can_rearm_rx_path(const char* reason) {
+  const uint32_t before_flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
+  const uint32_t before_fifo0 =
+      usb2can_can_get_rxfifo_fill_level(0U);
+  const uint32_t before_fifo1 =
+      usb2can_can_get_rxfifo_fill_level(1U);
+  const uint32_t drained_fifo0 = usb2can_can_drain_rxfifo(0U);
+  const uint32_t drained_fifo1 = usb2can_can_drain_rxfifo(1U);
+  const uint32_t clear_flags =
+      mcan_get_interrupt_flags(BOARD_APP_CAN_BASE) &
+      USB2CAN_CAN_RX_REARM_FLAGS;
+
+  if (clear_flags != 0U) {
+    mcan_clear_interrupt_flags(BOARD_APP_CAN_BASE, clear_flags);
+  }
+
+  if (before_flags != 0U || before_fifo0 != 0U || before_fifo1 != 0U ||
+      drained_fifo0 != 0U || drained_fifo1 != 0U || clear_flags != 0U) {
+    printf("[usb2can][can] rx path rearmed reason=%s flags_before=0x%08lX "
+           "flags_cleared=0x%08lX fifo0_before=%lu fifo1_before=%lu "
+           "drained0=%lu drained1=%lu\n",
+           reason != NULL ? reason : "unknown",
+           (unsigned long)before_flags, (unsigned long)clear_flags,
+           (unsigned long)before_fifo0, (unsigned long)before_fifo1,
+           (unsigned long)drained_fifo0, (unsigned long)drained_fifo1);
+  }
 }
 
 /**
@@ -262,14 +335,6 @@ static Usb2CanStatus usb2can_can_apply_mode(Usb2CanMode mode) {
 SDK_DECLARE_EXT_ISR_M(BOARD_APP_CAN_IRQn, usb2can_can_isr)
 void usb2can_can_isr(void) {
   uint32_t flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
-  const uint32_t fifo0_flags =
-      MCAN_INT_RXFIFO0_NEW_MSG | MCAN_INT_RXFIFO0_FULL |
-      MCAN_INT_RXFIFO0_MSG_LOST | MCAN_INT_RXFIFO0_WMK_REACHED;
-  const uint32_t fifo1_flags =
-      MCAN_INT_RXFIFO1_NEW_MSG | MCAN_INT_RXFIFO1_FULL |
-      MCAN_INT_RXFIFO1_MSG_LOST | MCAN_INT_RXFIFO1_WMK_REACHED;
-  const uint32_t rx_flags = flags & (MCAN_EVENT_RECEIVE | fifo0_flags |
-                                     fifo1_flags);
 
   if ((flags & MCAN_INT_RXFIFO0_FULL) != 0U) {
     g_usb2can_can_rxfifo0_full_count++;
@@ -281,24 +346,8 @@ void usb2can_can_isr(void) {
     printf("[usb2can][can-isr] rxfifo0 lost count=%lu\n",
            (unsigned long)g_usb2can_can_rxfifo0_lost_count);
   }
-  if ((flags & fifo0_flags) != 0U) {
-    while (MCAN_RXF0S_F0FL_GET(BOARD_APP_CAN_BASE->RXF0S) > 0U) {
-      Usb2CanBusFrame frame;
-
-      if (mcan_read_rxfifo(BOARD_APP_CAN_BASE, 0U,
-                           (mcan_rx_message_t*)&g_usb2can_last_rx_message) !=
-          status_success) {
-        printf("[usb2can][can-isr] read rxfifo0 failed\n");
-        break;
-      }
-      usb2can_can_convert_rx_message(
-          (const mcan_rx_message_t*)&g_usb2can_last_rx_message, &frame);
-      if (g_usb2can_can_rx_callback != NULL) {
-        g_usb2can_can_rx_callback(&frame);
-      } else {
-        printf("[usb2can][can-isr] rx callback is null\n");
-      }
-    }
+  if ((flags & USB2CAN_CAN_RXFIFO0_FLAGS) != 0U) {
+    (void)usb2can_can_drain_rxfifo(0U);
   }
 
   if ((flags & MCAN_INT_RXFIFO1_FULL) != 0U) {
@@ -311,32 +360,16 @@ void usb2can_can_isr(void) {
     printf("[usb2can][can-isr] rxfifo1 lost count=%lu\n",
            (unsigned long)g_usb2can_can_rxfifo1_lost_count);
   }
-  if ((flags & fifo1_flags) != 0U) {
-    while (MCAN_RXF1S_F1FL_GET(BOARD_APP_CAN_BASE->RXF1S) > 0U) {
-      Usb2CanBusFrame frame;
-
-      if (mcan_read_rxfifo(BOARD_APP_CAN_BASE, 1U,
-                           (mcan_rx_message_t*)&g_usb2can_last_rx_message) !=
-          status_success) {
-        printf("[usb2can][can-isr] read rxfifo1 failed\n");
-        break;
-      }
-      usb2can_can_convert_rx_message(
-          (const mcan_rx_message_t*)&g_usb2can_last_rx_message, &frame);
-      if (g_usb2can_can_rx_callback != NULL) {
-        g_usb2can_can_rx_callback(&frame);
-      } else {
-        printf("[usb2can][can-isr] rx callback is null\n");
-      }
-    }
+  if ((flags & USB2CAN_CAN_RXFIFO1_FLAGS) != 0U) {
+    (void)usb2can_can_drain_rxfifo(1U);
   }
   if ((flags & MCAN_INT_MSG_STORE_TO_RXBUF) != 0U) {
     printf("[usb2can][can-isr] rx buffer store flag set flags=0x%08lX\n",
            (unsigned long)flags);
   }
-  if ((flags & ~rx_flags) != 0U) {
+  if ((flags & ~USB2CAN_CAN_RX_REARM_FLAGS) != 0U) {
     printf("[usb2can][can-isr] other flags=0x%08lX\n",
-           (unsigned long)(flags & ~rx_flags));
+           (unsigned long)(flags & ~USB2CAN_CAN_RX_REARM_FLAGS));
   }
 
   mcan_clear_interrupt_flags(BOARD_APP_CAN_BASE, flags);
@@ -396,7 +429,8 @@ Usb2CanStatus usb2can_can_reconfigure(Usb2CanMode mode) {
              (unsigned int)mode);
       return usb2can_can_apply_mode(mode);
     }
-    printf("[usb2can][can] reconfigure skipped mode=%u unchanged\n",
+    usb2can_can_rearm_rx_path("same-mode");
+    printf("[usb2can][can] reconfigure skipped mode=%u unchanged rx_rearmed=1\n",
            (unsigned int)mode);
     return kUsb2CanStatusOk;
   }

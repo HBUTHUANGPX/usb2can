@@ -312,3 +312,36 @@ mtval: 0xfffffff9
 - [tools/recv_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/tools/recv_can_test.py)
 - [tests/test_send_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/tests/test_send_can_test.py)
 - [tests/test_recv_can_test.py](/home/hpx/HPXLoco_5/hpm_work/usb2can/tests/test_recv_can_test.py)
+
+## 9. 2026-04-21 CANFD BRS 扩展帧首轮接收丢帧定位
+
+现象：
+
+- 先完成混合模式压测，再执行同模式 `canfd-brs --set-mode-only`。
+- 随后启动 `recv_can_test.py`，外部 CAN 分析仪第一次无间隔发送 100 帧
+  CANFD BRS 扩展帧时，主机只收到接近 RXFIFO 深度的帧数。
+- 板级日志出现 `rxfifo0 full` / `rxfifo0 lost`。
+- 不关闭 Python 接收程序，第二次发送同样 100 帧可以完整接收。
+
+判断：
+
+- 该问题不是 RXFIFO 容量不足。容量变化只会改变第一次能缓存的帧数，不会解释
+  “第二次发送正常”。
+- 更符合的根因是：同模式 reconfigure 直接 skip，未清理前序压测留下的 MCAN
+  接收挂起状态，导致第一次 burst 未及时由 `RXFIFO0_NEW_MSG` 路径唤醒，直到
+  FIFO full/lost 后才进入 ISR drain。
+
+处理：
+
+- 将 ISR 中 RXFIFO0/RXFIFO1 的 drain 逻辑抽为共用函数。
+- 同模式 reconfigure 不再完全空操作，而是执行 `rx path rearm`：
+  - 读取并 drain 当前 RXFIFO0/RXFIFO1。
+  - 清理接收相关的 MCAN IR 挂起位。
+  - 仅在发现残留 flags/FIFO 时打印诊断日志。
+
+期望验证：
+
+- 复现路径中执行 `python tools/send_can_test.py --mode canfd-brs --set-mode-only --read-response`
+  后，若存在残留状态，应看到 `rx path rearmed`。
+- 随后的第一轮 CAN 分析仪 100 帧无间隔扩展帧接收，不应再出现只收到 FIFO 深度
+  附近帧数的现象。
