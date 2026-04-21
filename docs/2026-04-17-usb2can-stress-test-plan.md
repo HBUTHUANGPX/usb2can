@@ -207,9 +207,9 @@ conda activate usb2can
 python -u tools/recv_can_test.py --port /dev/ttyACM0
 ```
 
-CAN FD 模式启动日志中应出现 `rxfifo0=24 rxfifo1=0 rxbuf=0`，表示固件已使用
-接收优先的 MCAN message RAM 布局。若使用无间隔 burst 测试，仍建议从 100 帧
-开始观察，再逐步提高帧数。
+CAN FD 模式启动日志中应出现 `rxfifo0=28 rxfifo1=0 rxbuf=0 txfifo=4`，
+表示固件已使用接收优先的 MCAN message RAM 布局。若使用无间隔 burst 测试，
+仍建议从 100 帧开始观察，再逐步提高帧数。
 
 ### 6.1 CAN2 回传
 

@@ -209,10 +209,10 @@ python -u tools/recv_can_test.py --port /dev/ttyACM0
 ```
 
 In CAN FD / CAN FD BRS mode, the board startup log should include
-`rxfifo0=24 rxfifo1=0 rxbuf=0`. This confirms the receive-priority message RAM
-layout is active. For zero-interval analyzer bursts, start with 100 frames, then
-increase gradually after confirming there is no `rxfifo0 full` or `rxfifo0 lost`
-log.
+`rxfifo0=28 rxfifo1=0 rxbuf=0 txfifo=4`. This confirms the receive-priority
+message RAM layout is active. For zero-interval analyzer bursts, start with
+100 frames, then increase gradually after confirming there is no `rxfifo0 full`
+or `rxfifo0 lost` log.
 
 ### 6.1 Classic CAN reporting
 

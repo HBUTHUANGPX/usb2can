@@ -405,7 +405,7 @@ Current key firmware logs include:
 
 - `[usb2can][app] init protocol_head=... mode=... can_baudrate=... can_sp=... canfd_data_baudrate=... canfd_data_sp=... canfd_tdc=...`
 - `[usb2can][can] init requested mode=... baud=... sp=... baud_fd=... sp_fd=... tdc=... tdco=... tdcf=...`
-- `[usb2can][can] active mode=... clock=... baud=... sp=... baud_fd=... sp_fd=... canfd=... tdc=... tdco_cfg=... tdcf_cfg=... rxfifo0=... rxfifo1=... rxbuf=... dbtp=... tdcr=...`
+- `[usb2can][can] active mode=... clock=... baud=... sp=... baud_fd=... sp_fd=... canfd=... tdc=... tdco_cfg=... tdcf_cfg=... rxfifo0=... rxfifo1=... rxbuf=... txfifo=... dbtp=... tdcr=...`
 - `[usb2can][can] reconfigure begin old=... new=...`
 - `[usb2can][can] reconfigure recovering bus-off mode=...`
 - `[usb2can][can] reconfigure skipped mode=... unchanged`

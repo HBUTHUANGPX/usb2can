@@ -136,6 +136,14 @@ static void usb2can_can_prepare_canfd_rx_ram_config(
   ram_config->enable_rxbuf = false;
   ram_config->rxbuf_elem_count = 0U;
   ram_config->rxbuf_data_field_size = 0U;
+
+  ram_config->txbuf_dedicated_txbuf_elem_count = 0U;
+  ram_config->txbuf_fifo_or_queue_elem_count =
+      USB2CAN_CONFIG_CANFD_TXFIFO_ELEM_COUNT;
+
+  ram_config->enable_tx_evt_fifo = false;
+  ram_config->tx_evt_fifo_elem_count = 0U;
+  ram_config->tx_evt_fifo_watermark = 0U;
 }
 
 /**
@@ -221,7 +229,8 @@ static Usb2CanStatus usb2can_can_apply_mode(Usb2CanMode mode) {
   g_usb2can_can_mode = mode;
   printf("[usb2can][can] active mode=%u clock=%lu baud=%lu sp=%u "
          "baud_fd=%lu sp_fd=%u canfd=%d tdc=%d tdco_cfg=%u tdcf_cfg=%u "
-         "rxfifo0=%u rxfifo1=%u rxbuf=%u dbtp=0x%08lX tdcr=0x%08lX\n",
+         "rxfifo0=%u rxfifo1=%u rxbuf=%u txfifo=%u dbtp=0x%08lX "
+         "tdcr=0x%08lX\n",
          (unsigned int)mode, (unsigned long)can_clock,
          (unsigned long)mcan_config.baudrate,
          (unsigned int)mcan_config.can20_samplepoint_min,
@@ -237,6 +246,7 @@ static Usb2CanStatus usb2can_can_apply_mode(Usb2CanMode mode) {
          mcan_config.ram_config.enable_rxbuf
              ? (unsigned int)mcan_config.ram_config.rxbuf_elem_count
              : 0U,
+         (unsigned int)mcan_config.ram_config.txbuf_fifo_or_queue_elem_count,
          (unsigned long)BOARD_APP_CAN_BASE->DBTP,
          (unsigned long)BOARD_APP_CAN_BASE->TDCR);
   return kUsb2CanStatusOk;

@@ -173,7 +173,7 @@ static Usb2CanMode g_usb2can_active_mode = USB2CAN_CONFIG_DEFAULT_MODE;
  * @return `true` 表示写入成功，`false` 表示环形缓冲区已满。
  */
 static bool usb2can_app_can_rx_ring_push_from_isr(
-    const Usb2CanBusFrame* frame) {
+    const Usb2CanBusFrame* frame, bool* notify_required) {
   bool pushed = false;
   UBaseType_t saved_interrupt_status;
 
@@ -183,6 +183,9 @@ static bool usb2can_app_can_rx_ring_push_from_isr(
 
   saved_interrupt_status = taskENTER_CRITICAL_FROM_ISR();
   if (g_usb2can_can_rx_ring.count < USB2CAN_APP_CAN_RX_RING_LENGTH) {
+    if (notify_required != NULL) {
+      *notify_required = (g_usb2can_can_rx_ring.count == 0U);
+    }
     g_usb2can_can_rx_ring.frames[g_usb2can_can_rx_ring.write_index] = *frame;
     g_usb2can_can_rx_ring.write_index =
         (g_usb2can_can_rx_ring.write_index + 1U) %
@@ -907,6 +910,7 @@ void usb2can_app_on_usb_rx(const uint8_t* data, size_t length) {
  */
 void usb2can_app_on_can_rx(const Usb2CanBusFrame* frame) {
   BaseType_t task_woken = pdFALSE;
+  bool notify_required = false;
 
   if (frame == NULL) {
     return;
@@ -915,8 +919,9 @@ void usb2can_app_on_can_rx(const Usb2CanBusFrame* frame) {
     return;
   }
 
-  if (usb2can_app_can_rx_ring_push_from_isr(frame)) {
+  if (usb2can_app_can_rx_ring_push_from_isr(frame, &notify_required) &&
+      notify_required) {
     vTaskNotifyGiveFromISR(g_usb2can_usb_tx_task_handle, &task_woken);
+    portYIELD_FROM_ISR(task_woken);
   }
-  portYIELD_FROM_ISR(task_woken);
 }

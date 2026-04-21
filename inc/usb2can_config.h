@@ -57,7 +57,9 @@
 /** @brief CAN FD TDC 滤波窗口；0 表示使用 HPM SDK 按数据段时序自动计算。 */
 #define USB2CAN_CONFIG_CANFD_TDC_FILTER_WINDOW 0U
 /** @brief CAN FD 接收优先布局下的 RXFIFO0 深度。 */
-#define USB2CAN_CONFIG_CANFD_RXFIFO0_ELEM_COUNT 24U
+#define USB2CAN_CONFIG_CANFD_RXFIFO0_ELEM_COUNT 28U
+/** @brief CAN FD 接收优先布局下保留的 TX FIFO 深度。 */
+#define USB2CAN_CONFIG_CANFD_TXFIFO_ELEM_COUNT 4U
 
 /** @brief USB 设备厂商字符串。 */
 #define USB2CAN_CONFIG_USB_MANUFACTURER_STRING "HPMicro"
