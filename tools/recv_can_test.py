@@ -324,8 +324,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     parser = ProtocolStreamParser()
 
-    print(f"listening on: {args.port}")
-    print("press Ctrl+C to stop")
+    print(f"listening on: {args.port}", flush=True)
+    print("press Ctrl+C to stop", flush=True)
 
     try:
         with serial.Serial(args.port, baudrate=args.baudrate, timeout=args.timeout) as ser:

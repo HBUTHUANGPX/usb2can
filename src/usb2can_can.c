@@ -106,6 +106,39 @@ static void usb2can_can_convert_rx_message(const mcan_rx_message_t* source,
 }
 
 /**
+ * @brief 将 CAN FD 消息 RAM 调整为接收优先布局。
+ *
+ * HPM SDK 的 CAN FD 默认 RXFIFO0 深度只有 8。USB2CAN 的 CAN->USB 压测会
+ * 遇到外部分析仪无间隔 burst，优先扩大 RXFIFO0，并关闭当前未使用的
+ * RXFIFO1/RXBUF，保留默认 TX buffer 与 TX event FIFO。
+ *
+ * @param ram_config 待调整的 MCAN RAM 配置。
+ */
+static void usb2can_can_prepare_canfd_rx_ram_config(
+    mcan_ram_config_t* ram_config) {
+  if (ram_config == NULL) {
+    return;
+  }
+
+  ram_config->rxfifos[0].enable = 1U;
+  ram_config->rxfifos[0].elem_count =
+      USB2CAN_CONFIG_CANFD_RXFIFO0_ELEM_COUNT;
+  ram_config->rxfifos[0].watermark = 1U;
+  ram_config->rxfifos[0].operation_mode = MCAN_FIFO_OPERATION_MODE_BLOCKING;
+  ram_config->rxfifos[0].data_field_size = MCAN_DATA_FIELD_SIZE_64BYTES;
+
+  ram_config->rxfifos[1].enable = 0U;
+  ram_config->rxfifos[1].elem_count = 0U;
+  ram_config->rxfifos[1].watermark = 0U;
+  ram_config->rxfifos[1].operation_mode = MCAN_FIFO_OPERATION_MODE_BLOCKING;
+  ram_config->rxfifos[1].data_field_size = 0U;
+
+  ram_config->enable_rxbuf = false;
+  ram_config->rxbuf_elem_count = 0U;
+  ram_config->rxbuf_data_field_size = 0U;
+}
+
+/**
  * @brief 根据模式准备一份 MCAN 初始化配置。
  *
  * @param mode 目标模式。
@@ -127,11 +160,10 @@ static Usb2CanStatus usb2can_can_prepare_mcan_config(Usb2CanMode mode,
   mcan_config->can20_samplepoint_max =
       g_usb2can_can_config.samplepoint_per_mille;
   mcan_config->interrupt_mask =
-      MCAN_EVENT_RECEIVE | MCAN_INT_RXFIFO0_NEW_MSG |
-      MCAN_INT_RXFIFO0_FULL | MCAN_INT_RXFIFO0_MSG_LOST |
-      MCAN_INT_RXFIFO0_WMK_REACHED | MCAN_INT_RXFIFO1_NEW_MSG |
-      MCAN_INT_RXFIFO1_FULL | MCAN_INT_RXFIFO1_MSG_LOST |
-      MCAN_INT_RXFIFO1_WMK_REACHED;
+      MCAN_INT_RXFIFO0_NEW_MSG | MCAN_INT_RXFIFO0_FULL |
+      MCAN_INT_RXFIFO0_MSG_LOST | MCAN_INT_RXFIFO0_WMK_REACHED |
+      MCAN_INT_RXFIFO1_NEW_MSG | MCAN_INT_RXFIFO1_FULL |
+      MCAN_INT_RXFIFO1_MSG_LOST | MCAN_INT_RXFIFO1_WMK_REACHED;
   mcan_config->txbuf_trans_interrupt_mask = 0U;
   mcan_config->txbuf_cancel_finish_interrupt_mask = 0U;
   mcan_config->enable_canfd = false;
@@ -150,6 +182,7 @@ static Usb2CanStatus usb2can_can_prepare_mcan_config(Usb2CanMode mode,
         g_usb2can_can_config.samplepoint_fd_per_mille;
     mcan_get_default_ram_config(BOARD_APP_CAN_BASE, &mcan_config->ram_config,
                                 true);
+    usb2can_can_prepare_canfd_rx_ram_config(&mcan_config->ram_config);
   }
 
   return kUsb2CanStatusOk;
@@ -188,7 +221,7 @@ static Usb2CanStatus usb2can_can_apply_mode(Usb2CanMode mode) {
   g_usb2can_can_mode = mode;
   printf("[usb2can][can] active mode=%u clock=%lu baud=%lu sp=%u "
          "baud_fd=%lu sp_fd=%u canfd=%d tdc=%d tdco_cfg=%u tdcf_cfg=%u "
-         "dbtp=0x%08lX tdcr=0x%08lX\n",
+         "rxfifo0=%u rxfifo1=%u rxbuf=%u dbtp=0x%08lX tdcr=0x%08lX\n",
          (unsigned int)mode, (unsigned long)can_clock,
          (unsigned long)mcan_config.baudrate,
          (unsigned int)mcan_config.can20_samplepoint_min,
@@ -197,6 +230,13 @@ static Usb2CanStatus usb2can_can_apply_mode(Usb2CanMode mode) {
          mcan_config.enable_canfd ? 1 : 0, mcan_config.enable_tdc ? 1 : 0,
          (unsigned int)mcan_config.tdc_config.ssp_offset,
          (unsigned int)mcan_config.tdc_config.filter_window_length,
+         (unsigned int)mcan_config.ram_config.rxfifos[0].elem_count,
+         mcan_config.ram_config.rxfifos[1].enable
+             ? (unsigned int)mcan_config.ram_config.rxfifos[1].elem_count
+             : 0U,
+         mcan_config.ram_config.enable_rxbuf
+             ? (unsigned int)mcan_config.ram_config.rxbuf_elem_count
+             : 0U,
          (unsigned long)BOARD_APP_CAN_BASE->DBTP,
          (unsigned long)BOARD_APP_CAN_BASE->TDCR);
   return kUsb2CanStatusOk;
