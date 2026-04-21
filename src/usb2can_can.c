@@ -135,6 +135,11 @@ static Usb2CanStatus usb2can_can_prepare_mcan_config(Usb2CanMode mode,
 
   if (mode == kUsb2CanModeCanFdStd || mode == kUsb2CanModeCanFdStdBrs) {
     mcan_config->enable_canfd = true;
+    mcan_config->enable_tdc = g_usb2can_can_config.enable_tdc;
+    mcan_config->tdc_config.ssp_offset =
+        g_usb2can_can_config.tdc_ssp_offset;
+    mcan_config->tdc_config.filter_window_length =
+        g_usb2can_can_config.tdc_filter_window;
     mcan_config->baudrate_fd = g_usb2can_can_config.baudrate_fd;
     mcan_config->canfd_samplepoint_min =
         g_usb2can_can_config.samplepoint_fd_per_mille;
@@ -178,13 +183,19 @@ static Usb2CanStatus usb2can_can_apply_mode(Usb2CanMode mode) {
 
   intc_m_enable_irq_with_priority(BOARD_APP_CAN_IRQn, 1);
   g_usb2can_can_mode = mode;
-  printf("[usb2can][can] active mode=%u baud=%lu sp=%u baud_fd=%lu "
-         "sp_fd=%u canfd=%d\n",
-         (unsigned int)mode, (unsigned long)mcan_config.baudrate,
+  printf("[usb2can][can] active mode=%u clock=%lu baud=%lu sp=%u "
+         "baud_fd=%lu sp_fd=%u canfd=%d tdc=%d tdco_cfg=%u tdcf_cfg=%u "
+         "dbtp=0x%08lX tdcr=0x%08lX\n",
+         (unsigned int)mode, (unsigned long)can_clock,
+         (unsigned long)mcan_config.baudrate,
          (unsigned int)mcan_config.can20_samplepoint_min,
          (unsigned long)mcan_config.baudrate_fd,
          (unsigned int)mcan_config.canfd_samplepoint_min,
-         mcan_config.enable_canfd ? 1 : 0);
+         mcan_config.enable_canfd ? 1 : 0, mcan_config.enable_tdc ? 1 : 0,
+         (unsigned int)mcan_config.tdc_config.ssp_offset,
+         (unsigned int)mcan_config.tdc_config.filter_window_length,
+         (unsigned long)BOARD_APP_CAN_BASE->DBTP,
+         (unsigned long)BOARD_APP_CAN_BASE->TDCR);
   return kUsb2CanStatusOk;
 }
 
@@ -286,11 +297,14 @@ Usb2CanStatus usb2can_can_init(const Usb2CanCanConfig* config,
   g_usb2can_can_mode = config->initial_mode;
 
   printf("[usb2can][can] init requested mode=%u baud=%lu sp=%u "
-         "baud_fd=%lu sp_fd=%u\n",
+         "baud_fd=%lu sp_fd=%u tdc=%u tdco=%u tdcf=%u\n",
          (unsigned int)config->initial_mode, (unsigned long)config->baudrate,
          (unsigned int)config->samplepoint_per_mille,
          (unsigned long)config->baudrate_fd,
-         (unsigned int)config->samplepoint_fd_per_mille);
+         (unsigned int)config->samplepoint_fd_per_mille,
+         config->enable_tdc ? 1U : 0U,
+         (unsigned int)config->tdc_ssp_offset,
+         (unsigned int)config->tdc_filter_window);
 
 #if defined(MCAN_SOC_MSG_BUF_IN_AHB_RAM) && (MCAN_SOC_MSG_BUF_IN_AHB_RAM == 1)
   {
@@ -315,6 +329,11 @@ Usb2CanStatus usb2can_can_reconfigure(Usb2CanMode mode) {
   }
 
   if (mode == g_usb2can_can_mode) {
+    if (mcan_is_in_busoff_state(BOARD_APP_CAN_BASE)) {
+      printf("[usb2can][can] reconfigure recovering bus-off mode=%u\n",
+             (unsigned int)mode);
+      return usb2can_can_apply_mode(mode);
+    }
     printf("[usb2can][can] reconfigure skipped mode=%u unchanged\n",
            (unsigned int)mode);
     return kUsb2CanStatusOk;

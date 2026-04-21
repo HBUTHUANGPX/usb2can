@@ -747,16 +747,22 @@ Usb2CanStatus usb2can_app_init(const Usb2CanAppConfig* config) {
   can_config.baudrate_fd = g_usb2can_app_config.canfd_data_baudrate;
   can_config.samplepoint_fd_per_mille =
       g_usb2can_app_config.canfd_data_samplepoint_per_mille;
+  can_config.enable_tdc = g_usb2can_app_config.canfd_enable_tdc;
+  can_config.tdc_ssp_offset = g_usb2can_app_config.canfd_tdc_ssp_offset;
+  can_config.tdc_filter_window = g_usb2can_app_config.canfd_tdc_filter_window;
   can_config.initial_mode = g_usb2can_active_mode;
   printf("[usb2can][app] init protocol_head=0x%02X mode=%u "
          "can_baudrate=%lu can_sp=%u canfd_data_baudrate=%lu "
-         "canfd_data_sp=%u\n",
+         "canfd_data_sp=%u canfd_tdc=%u tdc_ssp=%u tdc_filter=%u\n",
          g_usb2can_app_config.protocol_head,
          (unsigned int)g_usb2can_app_config.initial_mode,
          (unsigned long)g_usb2can_app_config.can_baudrate,
          (unsigned int)g_usb2can_app_config.can_samplepoint_per_mille,
          (unsigned long)g_usb2can_app_config.canfd_data_baudrate,
-         (unsigned int)g_usb2can_app_config.canfd_data_samplepoint_per_mille);
+         (unsigned int)g_usb2can_app_config.canfd_data_samplepoint_per_mille,
+         g_usb2can_app_config.canfd_enable_tdc ? 1U : 0U,
+         (unsigned int)g_usb2can_app_config.canfd_tdc_ssp_offset,
+         (unsigned int)g_usb2can_app_config.canfd_tdc_filter_window);
   if (usb2can_can_init(&can_config, usb2can_app_on_can_rx) !=
       kUsb2CanStatusOk) {
     printf("usb2can can init failed.\n");
@@ -780,6 +786,9 @@ Usb2CanAppConfig usb2can_app_get_default_config(void) {
   config.canfd_data_baudrate = USB2CAN_CONFIG_CANFD_DATA_BAUDRATE;
   config.canfd_data_samplepoint_per_mille =
       USB2CAN_CONFIG_CANFD_DATA_SAMPLEPOINT_PERMILLE;
+  config.canfd_enable_tdc = (USB2CAN_CONFIG_CANFD_ENABLE_TDC != 0U);
+  config.canfd_tdc_ssp_offset = USB2CAN_CONFIG_CANFD_TDC_SSP_OFFSET;
+  config.canfd_tdc_filter_window = USB2CAN_CONFIG_CANFD_TDC_FILTER_WINDOW;
   config.initial_mode = USB2CAN_CONFIG_DEFAULT_MODE;
   return config;
 }

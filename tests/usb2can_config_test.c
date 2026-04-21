@@ -28,6 +28,12 @@ static void test_default_canfd_brs_bit_timing(void) {
               "CAN FD data bitrate should default to 5 Mbps");
   expect_true(USB2CAN_CONFIG_CANFD_DATA_SAMPLEPOINT_PERMILLE == 750U,
               "CAN FD data sample point should default to 75%");
+  expect_true(USB2CAN_CONFIG_CANFD_ENABLE_TDC == 1U,
+              "CAN FD transmitter delay compensation should be enabled");
+  expect_true(USB2CAN_CONFIG_CANFD_TDC_SSP_OFFSET == 0U,
+              "CAN FD TDC SSP offset should default to SDK auto calculation");
+  expect_true(USB2CAN_CONFIG_CANFD_TDC_FILTER_WINDOW == 0U,
+              "CAN FD TDC filter window should default to SDK auto calculation");
 }
 
 int main(void) {

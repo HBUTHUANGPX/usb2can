@@ -50,6 +50,12 @@
 #define USB2CAN_CONFIG_CANFD_DATA_BAUDRATE 5000000UL
 /** @brief CAN FD 数据相位默认采样点，单位为千分比，750 表示 75%。 */
 #define USB2CAN_CONFIG_CANFD_DATA_SAMPLEPOINT_PERMILLE 750U
+/** @brief CAN FD 默认启用发送延迟补偿，5Mbps BRS 下建议开启。 */
+#define USB2CAN_CONFIG_CANFD_ENABLE_TDC 1U
+/** @brief CAN FD TDC SSP 偏移；0 表示使用 HPM SDK 按数据段时序自动计算。 */
+#define USB2CAN_CONFIG_CANFD_TDC_SSP_OFFSET 0U
+/** @brief CAN FD TDC 滤波窗口；0 表示使用 HPM SDK 按数据段时序自动计算。 */
+#define USB2CAN_CONFIG_CANFD_TDC_FILTER_WINDOW 0U
 
 /** @brief USB 设备厂商字符串。 */
 #define USB2CAN_CONFIG_USB_MANUFACTURER_STRING "HPMicro"

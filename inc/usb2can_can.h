@@ -21,6 +21,12 @@ typedef struct Usb2CanCanConfig {
   uint32_t baudrate_fd;
   /** @brief CAN FD 数据相位目标采样点，单位为千分比。 */
   uint16_t samplepoint_fd_per_mille;
+  /** @brief CAN FD 是否启用发送延迟补偿。 */
+  bool enable_tdc;
+  /** @brief CAN FD TDC SSP 偏移，0 表示由 SDK 自动计算。 */
+  uint8_t tdc_ssp_offset;
+  /** @brief CAN FD TDC 滤波窗口，0 表示由 SDK 自动计算。 */
+  uint8_t tdc_filter_window;
   /** @brief 初始活动模式。 */
   Usb2CanMode initial_mode;
 } Usb2CanCanConfig;
