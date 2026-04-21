@@ -40,6 +40,37 @@ ATTR_PLACE_AT(".ahb_sram") static uint32_t g_usb2can_can_msg_buffer
 static volatile mcan_rx_message_t g_usb2can_last_rx_message;
 
 /**
+ * @brief 打印 MCAN 发送失败时的协议状态与错误计数。
+ *
+ * SDK 的 blocking 发送失败常见原因是等待 TX 完成超时；现场状态能区分 ACK、
+ * 数据相位错误、error passive/bus-off 等总线侧问题。
+ */
+static void usb2can_can_log_tx_failure(hpm_stat_t status) {
+  mcan_error_count_t error_count = {0};
+  mcan_protocol_status_t protocol_status = {0};
+  uint32_t interrupt_flags = mcan_get_interrupt_flags(BOARD_APP_CAN_BASE);
+
+  mcan_get_error_counter(BOARD_APP_CAN_BASE, &error_count);
+  (void)mcan_get_protocol_status(BOARD_APP_CAN_BASE, &protocol_status);
+
+  printf("[usb2can][can] tx fail status=%d ir=0x%08lX lec=%u dlec=%u "
+         "act=%u tec=%u rec=%u cel=%u warn=%u passive=%u busoff=%u "
+         "pxe=%u tdcv=%u\n",
+         (int)status, (unsigned long)interrupt_flags,
+         (unsigned int)mcan_get_last_error_code(BOARD_APP_CAN_BASE),
+         (unsigned int)mcan_get_last_data_error_code(BOARD_APP_CAN_BASE),
+         (unsigned int)protocol_status.activity,
+         (unsigned int)error_count.transmit_error_count,
+         (unsigned int)error_count.receive_error_count,
+         (unsigned int)error_count.can_error_logging_count,
+         protocol_status.in_warning_state ? 1U : 0U,
+         protocol_status.in_error_passive_state ? 1U : 0U,
+         protocol_status.in_bus_off_state ? 1U : 0U,
+         protocol_status.protocol_exception_evt_occurred ? 1U : 0U,
+         (unsigned int)protocol_status.tdc_val);
+}
+
+/**
  * @brief 将 MCAN 驱动消息对象翻译为项目内部标准 CAN 帧。
  *
  * @param source 驱动层原始接收对象。
@@ -316,8 +347,10 @@ Usb2CanStatus usb2can_can_send(const Usb2CanStandardFrame* frame) {
   tx_frame.dlc = frame->dlc;
   memcpy(tx_frame.data_8, frame->payload, frame->dlc);
 
-  if (mcan_transmit_blocking(BOARD_APP_CAN_BASE, &tx_frame) != status_success) {
+  hpm_stat_t status = mcan_transmit_blocking(BOARD_APP_CAN_BASE, &tx_frame);
+  if (status != status_success) {
     printf("[usb2can][can] mcan_transmit_blocking failed\n");
+    usb2can_can_log_tx_failure(status);
     return kUsb2CanStatusIoError;
   }
 
@@ -345,9 +378,11 @@ Usb2CanStatus usb2can_can_send_fd(const Usb2CanFdStandardFrame* frame,
   tx_frame.dlc = dlc;
   memcpy(tx_frame.data_8, frame->payload, frame->data_length);
 
-  if (mcan_transmit_blocking(BOARD_APP_CAN_BASE, &tx_frame) != status_success) {
+  hpm_stat_t status = mcan_transmit_blocking(BOARD_APP_CAN_BASE, &tx_frame);
+  if (status != status_success) {
     printf("[usb2can][can] mcan_transmit_blocking fd failed id=0x%03X len=%u brs=%d\n",
            frame->can_id, frame->data_length, enable_brs ? 1 : 0);
+    usb2can_can_log_tx_failure(status);
     return kUsb2CanStatusIoError;
   }
 
