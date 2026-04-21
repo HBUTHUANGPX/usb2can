@@ -129,8 +129,18 @@ class ParseArgsTest(unittest.TestCase):
 
         self.assertTrue(args.set_mode_only)
 
+    def test_parse_args_accepts_skip_mode_select_for_data_send(self):
+        args = send_can_test.parse_args(["--mode", "canfd-brs", "--skip-mode-select"])
+
+        self.assertTrue(args.skip_mode_select)
+
     def test_should_send_mode_select_is_false_for_query(self):
         args = send_can_test.parse_args(["--query", "get-mode"])
+
+        self.assertFalse(send_can_test.should_send_mode_select(args))
+
+    def test_should_send_mode_select_is_false_when_skipped(self):
+        args = send_can_test.parse_args(["--mode", "canfd-brs", "--skip-mode-select"])
 
         self.assertFalse(send_can_test.should_send_mode_select(args))
 

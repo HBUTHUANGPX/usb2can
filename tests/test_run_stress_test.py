@@ -33,10 +33,12 @@ class BuildCommandTest(unittest.TestCase):
         self.assertEqual(commands[1][commands[1].index("--query") + 1], "get-mode")
 
     def test_build_burst_command_for_canfd_brs_uses_64_bytes(self):
-        command = run_stress_test.build_burst_command("/dev/ttyACM0", 115200, "canfd-brs", 64, 50)
+        command = run_stress_test.build_burst_command("/dev/ttyACM0", 115200, "canfd-brs", 64, 50, 0.001)
 
         self.assertEqual(command[command.index("--mode") + 1], "canfd-brs")
+        self.assertIn("--skip-mode-select", command)
         self.assertEqual(command[command.index("--count") + 1], "50")
+        self.assertEqual(command[command.index("--interval") + 1], "0.001")
         self.assertEqual(len(command[command.index("--data") + 1].split()), 64)
 
 
@@ -47,18 +49,27 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual(args.port, "/dev/ttyACM0")
         self.assertEqual(args.switch_loops, 10)
         self.assertEqual(args.burst_count, 50)
+        self.assertAlmostEqual(args.burst_interval, 0.001)
         self.assertEqual(
             args.scenarios,
             ["mode-switch", "can2-burst", "canfd-burst", "canfd-brs-burst"],
         )
+
+    def test_parse_args_accepts_zero_burst_interval_for_overflow_testing(self):
+        args = run_stress_test.parse_args(["--burst-interval", "0"])
+
+        self.assertAlmostEqual(args.burst_interval, 0.0)
 
     def test_iter_commands_honors_selected_scenarios(self):
         args = run_stress_test.parse_args(["--switch-loops", "2", "--scenarios", "mode-switch", "canfd-burst"])
 
         plan = run_stress_test.iter_commands(args)
 
-        self.assertEqual(len(plan), 13)
+        self.assertEqual(len(plan), 14)
+        self.assertEqual(plan[-2][0], "canfd-burst-mode")
         self.assertEqual(plan[-1][0], "canfd-burst")
+        self.assertIn("--read-response", plan[-2][1])
+        self.assertIn("--skip-mode-select", plan[-1][1])
 
 
 if __name__ == "__main__":

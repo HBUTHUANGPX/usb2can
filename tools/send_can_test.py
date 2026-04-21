@@ -109,7 +109,7 @@ def build_get_capability_frame() -> bytes:
 
 
 def should_send_mode_select(args: argparse.Namespace) -> bool:
-    return args.query is None
+    return args.query is None and not args.skip_mode_select
 
 
 def build_canfd_protocol_frame(can_id: int, payload: bytes) -> bytes:
@@ -173,6 +173,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Send SET_MODE and exit without transmitting CAN data.",
     )
+    parser.add_argument(
+        "--skip-mode-select",
+        action="store_true",
+        help="Skip the automatic SET_MODE before data transmission.",
+    )
     args = parser.parse_args(argv)
     if args.count < 0:
         parser.error("--count must be >= 0")
@@ -184,6 +189,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--query cannot be used with --pack-count")
     if args.query is not None and args.set_mode_only:
         parser.error("--query cannot be used with --set-mode-only")
+    if args.query is not None and args.skip_mode_select:
+        parser.error("--query cannot be used with --skip-mode-select")
+    if args.set_mode_only and args.skip_mode_select:
+        parser.error("--set-mode-only cannot be used with --skip-mode-select")
     if args.mode == "can2" and len(parse_data_bytes(args.data)) > 8:
         parser.error("CAN2 mode payload supports at most 8 bytes")
     if args.mode != "can2" and len(parse_data_bytes(args.data)) not in CANFD_VALID_LENGTHS:

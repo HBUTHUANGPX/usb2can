@@ -25,20 +25,7 @@ def build_mode_switch_commands(port: str, baudrate: int, loops: int) -> list[lis
     commands: list[list[str]] = []
     for _ in range(loops):
         for mode in ("canfd", "canfd-brs", "can2"):
-            commands.append(
-                [
-                    sys.executable,
-                    str(SEND_TOOL),
-                    "--port",
-                    port,
-                    "--baudrate",
-                    str(baudrate),
-                    "--mode",
-                    mode,
-                    "--set-mode-only",
-                    "--read-response",
-                ]
-            )
+            commands.append(build_set_mode_command(port, baudrate, mode))
             commands.append(
                 [
                     sys.executable,
@@ -55,7 +42,7 @@ def build_mode_switch_commands(port: str, baudrate: int, loops: int) -> list[lis
     return commands
 
 
-def build_burst_command(port: str, baudrate: int, mode: str, payload_length: int, count: int) -> list[str]:
+def build_set_mode_command(port: str, baudrate: int, mode: str) -> list[str]:
     return [
         sys.executable,
         str(SEND_TOOL),
@@ -65,6 +52,29 @@ def build_burst_command(port: str, baudrate: int, mode: str, payload_length: int
         str(baudrate),
         "--mode",
         mode,
+        "--set-mode-only",
+        "--read-response",
+    ]
+
+
+def build_burst_command(
+    port: str,
+    baudrate: int,
+    mode: str,
+    payload_length: int,
+    count: int,
+    interval: float,
+) -> list[str]:
+    return [
+        sys.executable,
+        str(SEND_TOOL),
+        "--port",
+        port,
+        "--baudrate",
+        str(baudrate),
+        "--mode",
+        mode,
+        "--skip-mode-select",
         "--can-id",
         "0x123",
         "--data",
@@ -72,7 +82,7 @@ def build_burst_command(port: str, baudrate: int, mode: str, payload_length: int
         "--count",
         str(count),
         "--interval",
-        "0",
+        f"{interval:g}",
     ]
 
 
@@ -88,6 +98,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--burst-count", type=int, default=50, help="Number of frames per burst test.")
     parser.add_argument(
+        "--burst-interval",
+        type=float,
+        default=0.001,
+        help=(
+            "Seconds between frames during burst tests. Use 0 only for explicit "
+            "USB/CAN TX ring overflow testing."
+        ),
+    )
+    parser.add_argument(
         "--scenarios",
         nargs="+",
         choices=["mode-switch", "can2-burst", "canfd-burst", "canfd-brs-burst"],
@@ -100,6 +119,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--switch-loops must be >= 0")
     if args.burst_count < 0:
         parser.error("--burst-count must be >= 0")
+    if args.burst_interval < 0:
+        parser.error("--burst-interval must be >= 0")
     return args
 
 
@@ -109,12 +130,35 @@ def iter_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
         for index, command in enumerate(build_mode_switch_commands(args.port, args.baudrate, args.switch_loops), start=1):
             plan.append((f"mode-switch-{index:03d}", command))
     if "can2-burst" in args.scenarios:
-        plan.append(("can2-burst", build_burst_command(args.port, args.baudrate, "can2", 4, args.burst_count)))
-    if "canfd-burst" in args.scenarios:
-        plan.append(("canfd-burst", build_burst_command(args.port, args.baudrate, "canfd", 12, args.burst_count)))
-    if "canfd-brs-burst" in args.scenarios:
+        plan.append(("can2-burst-mode", build_set_mode_command(args.port, args.baudrate, "can2")))
         plan.append(
-            ("canfd-brs-burst", build_burst_command(args.port, args.baudrate, "canfd-brs", 64, args.burst_count))
+            (
+                "can2-burst",
+                build_burst_command(args.port, args.baudrate, "can2", 4, args.burst_count, args.burst_interval),
+            )
+        )
+    if "canfd-burst" in args.scenarios:
+        plan.append(("canfd-burst-mode", build_set_mode_command(args.port, args.baudrate, "canfd")))
+        plan.append(
+            (
+                "canfd-burst",
+                build_burst_command(args.port, args.baudrate, "canfd", 12, args.burst_count, args.burst_interval),
+            )
+        )
+    if "canfd-brs-burst" in args.scenarios:
+        plan.append(("canfd-brs-burst-mode", build_set_mode_command(args.port, args.baudrate, "canfd-brs")))
+        plan.append(
+            (
+                "canfd-brs-burst",
+                build_burst_command(
+                    args.port,
+                    args.baudrate,
+                    "canfd-brs",
+                    64,
+                    args.burst_count,
+                    args.burst_interval,
+                ),
+            )
         )
     return plan
 
@@ -146,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"port: {args.port}")
     print(f"switch_loops: {args.switch_loops}")
     print(f"burst_count: {args.burst_count}")
+    print(f"burst_interval: {args.burst_interval:g}")
     print(f"scenarios: {', '.join(args.scenarios)}")
 
     for label, command in plan:
