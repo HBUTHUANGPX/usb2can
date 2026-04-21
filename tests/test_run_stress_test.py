@@ -41,6 +41,14 @@ class BuildCommandTest(unittest.TestCase):
         self.assertEqual(command[command.index("--interval") + 1], "0.001")
         self.assertEqual(len(command[command.index("--data") + 1].split()), 64)
 
+    def test_build_extended_burst_command_selects_ext_format(self):
+        command = run_stress_test.build_burst_command(
+            "/dev/ttyACM0", 115200, "canfd-brs", 12, 50, 0.001, frame_format="ext", can_id="0x8001"
+        )
+
+        self.assertEqual(command[command.index("--frame-format") + 1], "ext")
+        self.assertEqual(command[command.index("--can-id") + 1], "0x8001")
+
 
 class ParseArgsTest(unittest.TestCase):
     def test_parse_args_uses_expected_defaults(self):
@@ -52,7 +60,7 @@ class ParseArgsTest(unittest.TestCase):
         self.assertAlmostEqual(args.burst_interval, 0.001)
         self.assertEqual(
             args.scenarios,
-            ["mode-switch", "can2-burst", "canfd-burst", "canfd-brs-burst"],
+            ["mode-switch", "can2-burst", "canfd-burst", "canfd-brs-burst", "canfd-brs-ext-burst"],
         )
 
     def test_parse_args_accepts_zero_burst_interval_for_overflow_testing(self):

@@ -10,6 +10,7 @@ This plan validates the stability of the current `usb2can` implementation in:
 - sustained `USB -> CAN` transmission
 - sustained `CAN -> USB` reporting
 - `64-byte CAN FD` payload scenarios
+- `CANFD_STD_BRS` extended-frame transmission/reporting
 - mixed mode switching and data traffic
 
 ## 2. Preconditions
@@ -42,6 +43,7 @@ By default it runs:
 - `CAN2 4-byte` burst transmission
 - `CANFD 12-byte` burst transmission
 - `CANFD_BRS 64-byte` burst transmission
+- `CANFD_BRS 12-byte` extended-frame burst transmission
 - a confirmed `SET_MODE --read-response` before each burst
 - `0.001s` default spacing between burst frames
 
@@ -54,7 +56,7 @@ python tools/run_stress_test.py --scenarios mode-switch canfd-brs-burst
 Recommended full bench-side stress command:
 
 ```bash
-conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst canfd-brs-ext-burst
 ```
 
 Notes:
@@ -181,6 +183,20 @@ Observe:
 - no CAN TX ring overflow
 - this is a maximum-write-pressure test, not the default normal stability pace
 
+### 5.5 CAN FD BRS extended-frame burst
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --frame-format ext --can-id 0x8001 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 100 --interval 0.001
+```
+
+Observe:
+
+- analyzer receives 100 frames continuously
+- frame format is CAN FD extended ID, ID `0x8001`
+- each frame length is `12`
+- `BRS=1`
+- board logs show no `mcan_transmit_blocking fd ext failed`
+
 ## 6. CAN -> USB Stress
 
 ### 6.1 Classic CAN reporting
@@ -233,6 +249,25 @@ Observe:
 - `len=64`
 - no truncation, no stalls, no error packets
 
+### 6.4 CAN FD BRS extended-frame reporting
+
+Switch mode first:
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --set-mode-only --read-response
+python tools/recv_can_test.py --port /dev/ttyACM0
+```
+
+Then inject 100 CAN FD BRS extended frames externally, for example ID `0x8001`
+with a 12-byte payload.
+
+Observe:
+
+- host continuously prints `CANFD_EXT_RX`
+- ID is displayed as `0x00008001`
+- `len=12`
+- no truncation or frame mixing
+
 ## 7. Mode Mismatch Tests
 
 ### 7.1 Send CAN2 data command while device is in CAN FD mode
@@ -260,6 +295,19 @@ Expected:
 - device reports an error or unsupported-mode result
 - CAN FD frame must not appear on the CAN bus
 
+### 7.3 Send extended-frame data command outside `CANFD_STD_BRS`
+
+```bash
+python tools/send_can_test.py --mode canfd --set-mode-only --read-response
+python tools/send_can_test.py --mode canfd-brs --skip-mode-select --frame-format ext --can-id 0x8001 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
+```
+
+Expected:
+
+- device reports an error or unsupported-mode result
+- no extended frame appears on the CAN bus
+- board log should include `reject canfd ext cmd in active mode=...`
+
 ## 8. Key Logs to Monitor
 
 Record these logs during stress testing:
@@ -269,10 +317,12 @@ Record these logs during stress testing:
 - `[usb2can][app] active mode switched to ...`
 - `[usb2can][app] reject can2 cmd in active mode=...`
 - `[usb2can][app] reject canfd cmd in active mode=...`
+- `[usb2can][app] reject canfd ext cmd in active mode=...`
 - `[usb2can][usb-rx-task] can tx ring overflow count=...`
 - `[usb2can][usb-tx-task] can rx ring overflow count=...`
 - `[usb2can][can] mcan_transmit_blocking failed`
 - `[usb2can][can] mcan_transmit_blocking fd failed ...`
+- `[usb2can][can] mcan_transmit_blocking fd ext failed ...`
 - `[usb2can][can] tx fail status=... ir=... lec=... dlec=... tec=... rec=... busoff=... tdcv=...`
 
 ## 9. Pass Criteria
@@ -282,6 +332,7 @@ Stress testing should be considered passed only when all of the following hold:
 - control-plane commands remain stable
 - mode switching shows no mismatch or unintended rollback
 - `CAN2`, `CANFD_STD`, and `CANFD_STD_BRS` all sustain data traffic
+- `CANFD_STD_BRS` extended frames sustain transmission/reporting
 - `64-byte CAN FD` frames are not truncated
 - no obvious frame loss during long or burst traffic
 - board logs show no persistent errors or ring-buffer overflow
@@ -353,3 +404,24 @@ Conclusion:
   data planes can be captured reliably at `200` frames each
 - the default `0.001s` burst interval is the current bench stability baseline
 - use explicit `--burst-interval 0` when testing firmware ring-overflow logging
+
+## 12. Extended-Frame Follow-Up on 2026-04-21
+
+After adding CAN FD BRS extended-frame support, run this additional stress item:
+
+```bash
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 0 --burst-count 200 --scenarios canfd-brs-ext-burst
+```
+
+Single-frame smoke command:
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --frame-format ext --can-id 0x8001 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
+```
+
+Expected:
+
+- CAN analyzer shows `CAN FD`, `Extended ID`, and `BRS=1`
+- ID is `0x8001`
+- DLC corresponds to a 12-byte payload
+- firmware logs show no `reject canfd ext cmd` or `fd ext failed`

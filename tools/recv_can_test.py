@@ -9,14 +9,14 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Iterable
 
-import serial
-
 
 PROTOCOL_HEAD = 0xA5
 CMD_CAN_TX = 0x01
 CMD_CAN_RX_REPORT = 0x02
 CMD_CANFD_TX = 0x03
 CMD_CANFD_RX_REPORT = 0x04
+CMD_CANFD_EXT_TX = 0x05
+CMD_CANFD_EXT_RX_REPORT = 0x06
 CMD_GET_MODE = 0x10
 CMD_GET_MODE_RSP = 0x11
 CMD_SET_MODE = 0x12
@@ -143,6 +143,24 @@ def decode_packet(packet: dict) -> dict:
             "raw_frame": packet["raw_frame"],
         }
 
+    if packet["cmd"] == CMD_CANFD_EXT_RX_REPORT:
+        if len(data) < 5:
+            raise ValueError("CAN FD extended report payload too short")
+        can_id = int.from_bytes(data[0:4], byteorder="little")
+        data_length = data[4]
+        payload = data[5:]
+        if can_id > 0x1FFFFFFF:
+            raise ValueError("CAN FD extended report ID out of range")
+        if len(payload) != data_length:
+            raise ValueError("CAN FD extended report length mismatch")
+        return {
+            "kind": "canfd_ext_rx",
+            "can_id": can_id,
+            "data_length": data_length,
+            "payload": payload,
+            "raw_frame": packet["raw_frame"],
+        }
+
     if packet["cmd"] == CMD_GET_MODE_RSP:
         if len(data) != 1:
             raise ValueError("get mode response payload length mismatch")
@@ -203,6 +221,14 @@ def format_decoded_message(message: dict) -> str:
     if message["kind"] == "canfd_rx":
         return (
             f"CANFD_RX can_id=0x{message['can_id']:03X} "
+            f"len={message['data_length']} "
+            f"payload={format_hex(message['payload'])} "
+            f"raw={format_hex(message['raw_frame'])}"
+        )
+
+    if message["kind"] == "canfd_ext_rx":
+        return (
+            f"CANFD_EXT_RX can_id=0x{message['can_id']:08X} "
             f"len={message['data_length']} "
             f"payload={format_hex(message['payload'])} "
             f"raw={format_hex(message['raw_frame'])}"
@@ -289,6 +315,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        import serial
+    except ModuleNotFoundError:
+        print("pyserial is required, install it with: pip install pyserial", file=sys.stderr)
+        return 1
+
     args = parse_args(argv)
     parser = ProtocolStreamParser()
 

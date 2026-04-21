@@ -71,7 +71,7 @@ static void usb2can_can_log_tx_failure(hpm_stat_t status) {
 }
 
 /**
- * @brief 将 MCAN 驱动消息对象翻译为项目内部标准 CAN 帧。
+ * @brief 将 MCAN 驱动消息对象翻译为项目内部 CAN 帧。
  *
  * @param source 驱动层原始接收对象。
  * @param target 输出的项目内部 CAN 标准帧对象。
@@ -81,7 +81,9 @@ static void usb2can_can_convert_rx_message(const mcan_rx_message_t* source,
   uint8_t data_length = 0U;
 
   memset(target, 0, sizeof(*target));
-  target->can_id = (uint16_t)(source->std_id & 0x07FFU);
+  target->is_extended_id = (source->use_ext_id != 0U);
+  target->can_id = target->is_extended_id ? (source->ext_id & 0x1FFFFFFFUL)
+                                          : (source->std_id & 0x07FFU);
 
   if (source->canfd_frame != 0U) {
     if (usb2can_bridge_canfd_dlc_to_length((uint8_t)source->dlc,
@@ -401,6 +403,39 @@ Usb2CanStatus usb2can_can_send_fd(const Usb2CanFdStandardFrame* frame,
   if (status != status_success) {
     printf("[usb2can][can] mcan_transmit_blocking fd failed id=0x%03X len=%u brs=%d\n",
            frame->can_id, frame->data_length, enable_brs ? 1 : 0);
+    usb2can_can_log_tx_failure(status);
+    return kUsb2CanStatusIoError;
+  }
+
+  return kUsb2CanStatusOk;
+}
+
+Usb2CanStatus usb2can_can_send_fd_ext(const Usb2CanFdExtendedFrame* frame,
+                                      bool enable_brs) {
+  mcan_tx_frame_t tx_frame;
+  uint8_t dlc = 0U;
+
+  if (frame == NULL || frame->can_id > 0x1FFFFFFFUL) {
+    return kUsb2CanStatusInvalidArgument;
+  }
+  if (usb2can_bridge_canfd_length_to_dlc(frame->data_length, &dlc) !=
+      kUsb2CanStatusOk) {
+    return kUsb2CanStatusInvalidArgument;
+  }
+
+  memset(&tx_frame, 0, sizeof(tx_frame));
+  tx_frame.ext_id = frame->can_id;
+  tx_frame.use_ext_id = 1U;
+  tx_frame.canfd_frame = 1U;
+  tx_frame.bitrate_switch = enable_brs ? 1U : 0U;
+  tx_frame.dlc = dlc;
+  memcpy(tx_frame.data_8, frame->payload, frame->data_length);
+
+  hpm_stat_t status = mcan_transmit_blocking(BOARD_APP_CAN_BASE, &tx_frame);
+  if (status != status_success) {
+    printf("[usb2can][can] mcan_transmit_blocking fd ext failed id=0x%08lX len=%u brs=%d\n",
+           (unsigned long)frame->can_id, frame->data_length,
+           enable_brs ? 1 : 0);
     usb2can_can_log_tx_failure(status);
     return kUsb2CanStatusIoError;
   }

@@ -75,6 +75,27 @@ static size_t usb2can_bridge_get_canfd_payload_length(
 }
 
 /**
+ * @brief 计算给定 CAN FD 扩展帧被编码为协议负载后的长度。
+ *
+ * @param frame 输入 CAN FD 扩展帧。
+ * @return 负载长度；若输入为空、ID 非法或长度非法则返回 0。
+ */
+static size_t usb2can_bridge_get_canfd_ext_payload_length(
+    const Usb2CanFdExtendedFrame* frame) {
+  uint8_t dlc = 0U;
+
+  if (frame == NULL || frame->can_id > 0x1FFFFFFFUL) {
+    return 0U;
+  }
+  if (usb2can_bridge_canfd_length_to_dlc(frame->data_length, &dlc) !=
+      kUsb2CanStatusOk) {
+    return 0U;
+  }
+
+  return (size_t)(5U + frame->data_length);
+}
+
+/**
  * @brief 将协议 data[] 负载解析为一条 CAN 标准帧。
  *
  * 负载采用小端编码：前两个字节保存 11-bit 标准 ID，第三个字节保存 DLC，之后
@@ -269,6 +290,70 @@ Usb2CanStatus usb2can_bridge_canfd_frame_to_payload(
   output[2] = frame->data_length;
   if (frame->data_length > 0U) {
     memcpy(&output[3], frame->payload, frame->data_length);
+  }
+  *output_length = payload_length;
+  return kUsb2CanStatusOk;
+}
+
+Usb2CanStatus usb2can_bridge_payload_to_canfd_ext_frame(
+    const uint8_t* data, size_t length, Usb2CanFdExtendedFrame* frame) {
+  uint8_t data_length = 0U;
+  uint8_t dlc = 0U;
+
+  if (data == NULL || frame == NULL) {
+    return kUsb2CanStatusInvalidArgument;
+  }
+  if (length < 5U) {
+    return kUsb2CanStatusLengthError;
+  }
+
+  data_length = data[4];
+  if (usb2can_bridge_canfd_length_to_dlc(data_length, &dlc) !=
+      kUsb2CanStatusOk) {
+    return kUsb2CanStatusLengthError;
+  }
+  if (length != (size_t)(5U + data_length)) {
+    return kUsb2CanStatusLengthError;
+  }
+
+  memset(frame, 0, sizeof(*frame));
+  frame->can_id = (uint32_t)data[0] | ((uint32_t)data[1] << 8U) |
+                  ((uint32_t)data[2] << 16U) | ((uint32_t)data[3] << 24U);
+  if (frame->can_id > 0x1FFFFFFFUL) {
+    return kUsb2CanStatusInvalidArgument;
+  }
+
+  frame->data_length = data_length;
+  if (data_length > 0U) {
+    memcpy(frame->payload, &data[5], data_length);
+  }
+
+  return kUsb2CanStatusOk;
+}
+
+Usb2CanStatus usb2can_bridge_canfd_ext_frame_to_payload(
+    const Usb2CanFdExtendedFrame* frame, uint8_t* output,
+    size_t output_capacity, size_t* output_length) {
+  const size_t payload_length =
+      usb2can_bridge_get_canfd_ext_payload_length(frame);
+
+  if (frame == NULL || output == NULL || output_length == NULL) {
+    return kUsb2CanStatusInvalidArgument;
+  }
+  if (payload_length == 0U) {
+    return kUsb2CanStatusInvalidArgument;
+  }
+  if (output_capacity < payload_length) {
+    return kUsb2CanStatusBufferTooSmall;
+  }
+
+  output[0] = (uint8_t)(frame->can_id & 0xFFU);
+  output[1] = (uint8_t)((frame->can_id >> 8U) & 0xFFU);
+  output[2] = (uint8_t)((frame->can_id >> 16U) & 0xFFU);
+  output[3] = (uint8_t)((frame->can_id >> 24U) & 0xFFU);
+  output[4] = frame->data_length;
+  if (frame->data_length > 0U) {
+    memcpy(&output[5], frame->payload, frame->data_length);
   }
   *output_length = payload_length;
   return kUsb2CanStatusOk;

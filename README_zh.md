@@ -16,8 +16,8 @@
 
 当前版本范围固定如下：
 
-- 只支持 `11-bit CAN ID`
-- 只支持标准帧，不支持扩展帧
+- CAN2.0 与普通 CAN FD 数据命令保持 `11-bit CAN ID` 标准帧
+- CAN FD BRS 额外支持 `29-bit CAN ID` 扩展帧
 - 不承载电机业务语义，只做协议转换
 - `1 个 USB 协议包 <-> 1 条 CAN/CAN FD 帧`
 
@@ -69,7 +69,7 @@
 推荐完整台架压测命令：
 
 ```bash
-conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst canfd-brs-ext-burst
 ```
 
 压测脚本会在每个 burst 前先确认目标模式，再使用 `--skip-mode-select` 发送纯
@@ -109,7 +109,8 @@ USB 线上一条完整协议帧的字节布局如下：
 
 - `len` 为小端
 - `crc16` 为小端
-- `data[]` 中的 `can_id` 为小端
+- `data[]` 中的标准帧 `can_id` 为 16-bit 小端
+- `data[]` 中的扩展帧 `can_id` 为 32-bit 小端，仅低 29 位有效
 - `GET_CAPABILITY_RSP` 中的 `mode_bitmap` 为小端
 
 ## 模式定义
@@ -120,7 +121,7 @@ USB 线上一条完整协议帧的字节布局如下：
 |---|---|---|
 | `0x00` | `CAN2_STD` | 经典 CAN2.0 标准帧 |
 | `0x01` | `CANFD_STD` | CAN FD 标准帧，`BRS=0` |
-| `0x02` | `CANFD_STD_BRS` | CAN FD 标准帧，`BRS=1` |
+| `0x02` | `CANFD_STD_BRS` | CAN FD，标准帧或扩展帧，`BRS=1` |
 
 ## 命令字定义
 
@@ -145,6 +146,8 @@ USB 线上一条完整协议帧的字节布局如下：
 | `0x02` | `CMD_CAN_RX_REPORT` | Device -> Host | 在 `CAN2_STD` 模式下上报 1 条 CAN2.0 标准帧 |
 | `0x03` | `CMD_CANFD_TX` | Host -> Device | 在 `CANFD_STD/CANFD_STD_BRS` 模式下发送 1 条 CAN FD 标准帧 |
 | `0x04` | `CMD_CANFD_RX_REPORT` | Device -> Host | 在 `CANFD_STD/CANFD_STD_BRS` 模式下上报 1 条 CAN FD 标准帧 |
+| `0x05` | `CMD_CANFD_EXT_TX` | Host -> Device | 在 `CANFD_STD_BRS` 模式下发送 1 条 CAN FD 扩展帧 |
+| `0x06` | `CMD_CANFD_EXT_RX_REPORT` | Device -> Host | 在 `CANFD_STD_BRS` 模式下上报 1 条 CAN FD 扩展帧 |
 | `0x7F` | `CMD_ERROR_REPORT` | Device -> Host | 上报解析、校验或底层收发错误 |
 
 ## 控制平面负载格式
@@ -263,11 +266,41 @@ USB 线上一条完整协议帧的字节布局如下：
 
 - `len = 3 + data_len`
 
+### CAN FD 扩展帧负载
+
+`CMD_CANFD_EXT_TX` 与 `CMD_CANFD_EXT_RX_REPORT` 使用相同的负载布局：
+
+```text
++------------+----------+----------------------+
+| can_id     | data_len | payload[data_len]    |
+| 4 bytes LE | 1 byte   | 0~64 bytes           |
++------------+----------+----------------------+
+```
+
+字段约束：
+
+- `can_id` 仅低 29 位有效，范围 `0x00000000 ~ 0x1FFFFFFF`
+- `data_len` 为实际数据长度，不是 DLC 原始编码
+- 只接受 CAN FD canonical 长度：
+  - `0..8`
+  - `12`
+  - `16`
+  - `20`
+  - `24`
+  - `32`
+  - `48`
+  - `64`
+- 当前扩展帧命令只在 `CANFD_STD_BRS` 模式下接受
+
+因此：
+
+- `len = 5 + data_len`
+
 ### BRS 说明
 
 - `CANFD_STD` 模式下，设备发送 CAN FD 帧时使用 `BRS=0`
-- `CANFD_STD_BRS` 模式下，设备发送 CAN FD 帧时使用 `BRS=1`
-- USB 协议里的 CAN FD 负载结构在这两个模式下相同，区别只在当前活动模式和底层 MCAN 配置
+- `CANFD_STD_BRS` 模式下，设备发送 CAN FD 标准帧或扩展帧时使用 `BRS=1`
+- BRS 由当前活动模式决定，USB 数据平面负载中不单独携带 per-frame BRS 标志
 
 ## 错误码定义
 
@@ -281,7 +314,7 @@ USB 线上一条完整协议帧的字节布局如下：
 | 错误码 | 名称 | 含义 |
 |---|---|---|
 | `0x00` | `None` | 无错误 |
-| `0x01` | `InvalidArgument` | 参数非法，例如 `can_id > 0x7FF` |
+| `0x01` | `InvalidArgument` | 参数非法，例如标准帧 `can_id > 0x7FF` 或扩展帧 `can_id > 0x1FFFFFFF` |
 | `0x02` | `BufferTooSmall` | 缓冲区空间不足 |
 | `0x03` | `ChecksumError` | CRC8 或 CRC16 校验失败 |
 | `0x04` | `LengthError` | `len`、`dlc`、`data_len` 或真实数据长度不匹配 |
@@ -295,6 +328,7 @@ USB 线上一条完整协议帧的字节布局如下：
 - 控制命令在任何模式下都可以发送
 - `SET_MODE` 成功后，设备立即切换到新模式
 - 切换成功后，旧模式数据命令会被拒绝
+- 扩展帧数据命令只在 `CANFD_STD_BRS` 下接受；在 `CAN2_STD/CANFD_STD` 下会被拒绝
 - 模式切换失败时，设备保留旧模式不变
 
 ## 主机工具
@@ -336,6 +370,12 @@ python tools/send_can_test.py --mode canfd-brs --set-mode-only --read-response
 python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
 ```
 
+发送 1 条 12 字节 CAN FD BRS 扩展帧：
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --frame-format ext --can-id 0x8001 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
+```
+
 在不自动发送 `SET_MODE` 的情况下发送数据：
 
 ```bash
@@ -374,6 +414,7 @@ python tools/recv_can_test.py --port /dev/ttyACM0
 
 - `[usb2can][app] reject can2 cmd in active mode=...`
 - `[usb2can][app] reject canfd cmd in active mode=...`
+- `[usb2can][app] reject canfd ext cmd in active mode=...`
 
 ### 回传过滤日志
 
@@ -383,6 +424,7 @@ python tools/recv_can_test.py --port /dev/ttyACM0
 
 - `[usb2can][can] mcan_transmit_blocking failed`
 - `[usb2can][can] mcan_transmit_blocking fd failed ...`
+- `[usb2can][can] mcan_transmit_blocking fd ext failed ...`
 - `[usb2can][can] tx fail status=... ir=... lec=... dlec=... act=... tec=... rec=... busoff=... tdcv=...`
 
 ## 当前实现文件

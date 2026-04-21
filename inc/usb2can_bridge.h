@@ -77,4 +77,28 @@ Usb2CanStatus usb2can_bridge_canfd_frame_to_payload(
     const Usb2CanFdStandardFrame* frame, uint8_t* output,
     size_t output_capacity, size_t* output_length);
 
+/**
+ * @brief 将协议 data[] 负载解析为一条 CAN FD 扩展帧。
+ *
+ * @param data 输入负载起始地址。
+ * @param length 输入负载长度。
+ * @param frame 输出的 CAN FD 扩展帧对象。
+ * @return 操作状态。
+ */
+Usb2CanStatus usb2can_bridge_payload_to_canfd_ext_frame(
+    const uint8_t* data, size_t length, Usb2CanFdExtendedFrame* frame);
+
+/**
+ * @brief 将一条 CAN FD 扩展帧编码为协议 data[] 负载。
+ *
+ * @param frame 输入 CAN FD 扩展帧。
+ * @param output 输出负载缓冲区。
+ * @param output_capacity 输出缓冲区容量。
+ * @param output_length 返回编码后的实际长度。
+ * @return 操作状态。
+ */
+Usb2CanStatus usb2can_bridge_canfd_ext_frame_to_payload(
+    const Usb2CanFdExtendedFrame* frame, uint8_t* output,
+    size_t output_capacity, size_t* output_length);
+
 #endif  // USB2CAN_INC_USB2CAN_BRIDGE_H_

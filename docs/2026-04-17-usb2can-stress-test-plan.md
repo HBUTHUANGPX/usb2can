@@ -10,6 +10,7 @@
 - `USB -> CAN` 连续下发稳定性
 - `CAN -> USB` 连续回传稳定性
 - `CAN FD 64-byte` 大负载场景
+- `CANFD_STD_BRS` 扩展帧收发场景
 - 模式切换与数据流混合场景
 
 ## 2. 测试前提
@@ -42,6 +43,7 @@ python tools/run_stress_test.py --dry-run
 - `CAN2 4-byte` 突发发送
 - `CANFD 12-byte` 突发发送
 - `CANFD_BRS 64-byte` 突发发送
+- `CANFD_BRS 12-byte` 扩展帧突发发送
 - 每个 burst 前先执行 `SET_MODE --read-response`，确认目标模式后再发数据
 - burst 默认帧间隔为 `0.001s`
 
@@ -54,7 +56,7 @@ python tools/run_stress_test.py --scenarios mode-switch canfd-brs-burst
 完整台架压测推荐命令：
 
 ```bash
-conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst canfd-brs-ext-burst
 ```
 
 说明：
@@ -181,6 +183,20 @@ python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04
 - 是否出现 CAN TX ring overflow
 - 该项是极限写入测试，不作为普通稳定性压测的默认节奏
 
+### 5.5 CAN FD BRS 扩展帧连发
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --frame-format ext --can-id 0x8001 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 100 --interval 0.001
+```
+
+观察点：
+
+- 抓包器连续收到 100 帧
+- 帧格式为 CAN FD 扩展帧，ID 为 `0x8001`
+- 每帧长度 `12`
+- `BRS=1`
+- 板级日志中无 `mcan_transmit_blocking fd ext failed`
+
 ## 6. CAN -> USB 压测
 
 ### 6.1 CAN2 回传
@@ -233,6 +249,25 @@ python tools/recv_can_test.py --port /dev/ttyACM0
 - `len=64`
 - 无截断、无卡顿、无错误报文
 
+### 6.4 CAN FD BRS 扩展帧回传
+
+先切模式：
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --set-mode-only --read-response
+python tools/recv_can_test.py --port /dev/ttyACM0
+```
+
+然后从外部总线侧连续发送 100 帧 CAN FD BRS 扩展帧，例如 ID `0x8001`、
+12-byte payload。
+
+观察点：
+
+- 主机终端连续打印 `CANFD_EXT_RX`
+- ID 显示为 `0x00008001`
+- `len=12`
+- 数据不截断、不串帧
+
 ## 7. 模式错配测试
 
 ### 7.1 在 `CANFD` 模式下发送 CAN2 数据命令
@@ -260,6 +295,19 @@ python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04
 - 设备返回错误上报或模式不支持
 - CAN 总线上不应发出 CAN FD 数据帧
 
+### 7.3 在非 `CANFD_STD_BRS` 模式下发送扩展帧数据命令
+
+```bash
+python tools/send_can_test.py --mode canfd --set-mode-only --read-response
+python tools/send_can_test.py --mode canfd-brs --skip-mode-select --frame-format ext --can-id 0x8001 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
+```
+
+预期：
+
+- 设备返回错误上报或模式不支持
+- CAN 总线上不应发出扩展帧
+- 板级日志应出现 `reject canfd ext cmd in active mode=...`
+
 ## 8. 重点日志检查项
 
 压测时建议同时记录以下日志：
@@ -269,10 +317,12 @@ python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04
 - `[usb2can][app] active mode switched to ...`
 - `[usb2can][app] reject can2 cmd in active mode=...`
 - `[usb2can][app] reject canfd cmd in active mode=...`
+- `[usb2can][app] reject canfd ext cmd in active mode=...`
 - `[usb2can][usb-rx-task] can tx ring overflow count=...`
 - `[usb2can][usb-tx-task] can rx ring overflow count=...`
 - `[usb2can][can] mcan_transmit_blocking failed`
 - `[usb2can][can] mcan_transmit_blocking fd failed ...`
+- `[usb2can][can] mcan_transmit_blocking fd ext failed ...`
 - `[usb2can][can] tx fail status=... ir=... lec=... dlec=... tec=... rec=... busoff=... tdcv=...`
 
 ## 9. 通过标准
@@ -282,6 +332,7 @@ python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04
 - 控制面命令持续稳定
 - 模式切换无错位、无错误回滚
 - `CAN2`、`CANFD_STD`、`CANFD_STD_BRS` 数据面都可持续工作
+- `CANFD_STD_BRS` 扩展帧可持续收发
 - `CAN FD 64-byte` 无截断
 - 长时间或高频测试中无明显丢帧
 - 板级日志中无持续性错误与 ring overflow
@@ -351,3 +402,24 @@ conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-c
 - 模式切换与 burst 数据发送解耦后，三种数据面各 `200` 帧均可稳定抓取
 - 压测脚本的默认 `0.001s` 节流适合作为当前台架的稳定性基准
 - 如需验证固件 ring overflow 日志，显式使用 `--burst-interval 0`
+
+## 12. 2026-04-21 扩展帧补充测试项
+
+新增 CAN FD BRS 扩展帧能力后，建议额外执行：
+
+```bash
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 0 --burst-count 200 --scenarios canfd-brs-ext-burst
+```
+
+单帧冒烟命令：
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --frame-format ext --can-id 0x8001 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
+```
+
+预期：
+
+- CAN 分析仪看到 `CAN FD`、`Extended ID`、`BRS=1`
+- ID 为 `0x8001`
+- DLC 对应 12-byte payload
+- 固件无 `reject canfd ext cmd` 与 `fd ext failed` 日志

@@ -64,8 +64,10 @@ def build_burst_command(
     payload_length: int,
     count: int,
     interval: float,
+    frame_format: str = "std",
+    can_id: str = "0x123",
 ) -> list[str]:
-    return [
+    command = [
         sys.executable,
         str(SEND_TOOL),
         "--port",
@@ -76,7 +78,7 @@ def build_burst_command(
         mode,
         "--skip-mode-select",
         "--can-id",
-        "0x123",
+        can_id,
         "--data",
         generate_hex_payload(payload_length),
         "--count",
@@ -84,6 +86,9 @@ def build_burst_command(
         "--interval",
         f"{interval:g}",
     ]
+    if frame_format != "std":
+        command.extend(["--frame-format", frame_format])
+    return command
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -109,8 +114,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--scenarios",
         nargs="+",
-        choices=["mode-switch", "can2-burst", "canfd-burst", "canfd-brs-burst"],
-        default=["mode-switch", "can2-burst", "canfd-burst", "canfd-brs-burst"],
+        choices=["mode-switch", "can2-burst", "canfd-burst", "canfd-brs-burst", "canfd-brs-ext-burst"],
+        default=["mode-switch", "can2-burst", "canfd-burst", "canfd-brs-burst", "canfd-brs-ext-burst"],
         help="Stress scenarios to execute.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them.")
@@ -157,6 +162,23 @@ def iter_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
                     64,
                     args.burst_count,
                     args.burst_interval,
+                ),
+            )
+        )
+    if "canfd-brs-ext-burst" in args.scenarios:
+        plan.append(("canfd-brs-ext-burst-mode", build_set_mode_command(args.port, args.baudrate, "canfd-brs")))
+        plan.append(
+            (
+                "canfd-brs-ext-burst",
+                build_burst_command(
+                    args.port,
+                    args.baudrate,
+                    "canfd-brs",
+                    12,
+                    args.burst_count,
+                    args.burst_interval,
+                    frame_format="ext",
+                    can_id="0x8001",
                 ),
             )
         )

@@ -383,6 +383,7 @@ static void usb2can_app_usb_rx_task(void* parameter) {
           continue;
         }
         frame.can_id = standard_frame.can_id;
+        frame.is_extended_id = false;
         frame.data_length = standard_frame.dlc;
         memcpy(frame.payload, standard_frame.payload, standard_frame.dlc);
 
@@ -419,8 +420,45 @@ static void usb2can_app_usb_rx_task(void* parameter) {
           continue;
         }
         frame.can_id = fd_frame.can_id;
+        frame.is_extended_id = false;
         frame.data_length = fd_frame.data_length;
         memcpy(frame.payload, fd_frame.payload, fd_frame.data_length);
+
+        if (!usb2can_app_can_tx_ring_push(&frame)) {
+          usb2can_app_report_error(kUsb2CanStatusIoError);
+          if (g_usb2can_can_tx_ring.overflow_count !=
+              last_can_tx_overflow_count) {
+            last_can_tx_overflow_count = g_usb2can_can_tx_ring.overflow_count;
+            printf("[usb2can][usb-rx-task] can tx ring overflow count=%lu\n",
+                   (unsigned long)last_can_tx_overflow_count);
+          }
+          continue;
+        }
+
+        if (g_usb2can_can_tx_task_handle != NULL) {
+          xTaskNotifyGive(g_usb2can_can_tx_task_handle);
+        }
+      } else if (packet.cmd == kUsb2CanCommandCanFdExtTx) {
+        Usb2CanFdExtendedFrame fd_ext_frame;
+        Usb2CanBusFrame frame = {.mode = g_usb2can_active_mode};
+        const Usb2CanStatus bridge_status =
+            usb2can_bridge_payload_to_canfd_ext_frame(packet.data, packet.len,
+                                                      &fd_ext_frame);
+
+        if (bridge_status != kUsb2CanStatusOk) {
+          usb2can_app_report_error(bridge_status);
+          continue;
+        }
+        if (g_usb2can_active_mode != kUsb2CanModeCanFdStdBrs) {
+          printf("[usb2can][app] reject canfd ext cmd in active mode=%u\n",
+                 (unsigned int)g_usb2can_active_mode);
+          usb2can_app_report_error(kUsb2CanStatusUnsupported);
+          continue;
+        }
+        frame.can_id = fd_ext_frame.can_id;
+        frame.is_extended_id = true;
+        frame.data_length = fd_ext_frame.data_length;
+        memcpy(frame.payload, fd_ext_frame.payload, fd_ext_frame.data_length);
 
         if (!usb2can_app_can_tx_ring_push(&frame)) {
           usb2can_app_report_error(kUsb2CanStatusIoError);
@@ -464,17 +502,29 @@ static void usb2can_app_can_tx_task(void* parameter) {
       Usb2CanStatus send_status = kUsb2CanStatusUnsupported;
       Usb2CanStandardFrame standard_frame;
       Usb2CanFdStandardFrame fd_frame;
+      Usb2CanFdExtendedFrame fd_ext_frame;
 
       did_work = true;
       if (frame.mode == kUsb2CanModeCan2Std) {
         memset(&standard_frame, 0, sizeof(standard_frame));
-        standard_frame.can_id = frame.can_id;
+        standard_frame.can_id = (uint16_t)frame.can_id;
         standard_frame.dlc = frame.data_length;
         memcpy(standard_frame.payload, frame.payload, frame.data_length);
         send_status = usb2can_can_send(&standard_frame);
+      } else if (frame.is_extended_id &&
+                 frame.mode == kUsb2CanModeCanFdStdBrs) {
+        memset(&fd_ext_frame, 0, sizeof(fd_ext_frame));
+        fd_ext_frame.can_id = frame.can_id;
+        fd_ext_frame.data_length = frame.data_length;
+        memcpy(fd_ext_frame.payload, frame.payload, frame.data_length);
+        send_status = usb2can_can_send_fd_ext(
+            &fd_ext_frame, frame.mode == kUsb2CanModeCanFdStdBrs);
+      } else if (frame.is_extended_id) {
+        printf("[usb2can][can-tx-task] drop unsupported extended tx mode=%u id=0x%08lX\n",
+               (unsigned int)frame.mode, (unsigned long)frame.can_id);
       } else {
         memset(&fd_frame, 0, sizeof(fd_frame));
-        fd_frame.can_id = frame.can_id;
+        fd_frame.can_id = (uint16_t)frame.can_id;
         fd_frame.data_length = frame.data_length;
         memcpy(fd_frame.payload, frame.payload, frame.data_length);
         send_status = usb2can_can_send_fd(
@@ -562,9 +612,9 @@ static void usb2can_app_usb_tx_task(void* parameter) {
                (unsigned int)frame.mode, (unsigned int)g_usb2can_active_mode);
         continue;
       }
-      if (frame.mode == kUsb2CanModeCan2Std) {
+      if (frame.mode == kUsb2CanModeCan2Std && !frame.is_extended_id) {
         Usb2CanStandardFrame standard_frame = {
-            .can_id = frame.can_id,
+            .can_id = (uint16_t)frame.can_id,
             .dlc = frame.data_length,
         };
         memcpy(standard_frame.payload, frame.payload, frame.data_length);
@@ -575,9 +625,27 @@ static void usb2can_app_usb_tx_task(void* parameter) {
           continue;
         }
         packet.cmd = kUsb2CanCommandCanRxReport;
-      } else {
-        Usb2CanFdStandardFrame fd_frame = {
+      } else if (frame.is_extended_id &&
+                 frame.mode == kUsb2CanModeCanFdStdBrs) {
+        Usb2CanFdExtendedFrame fd_ext_frame = {
             .can_id = frame.can_id,
+            .data_length = frame.data_length,
+        };
+        memcpy(fd_ext_frame.payload, frame.payload, frame.data_length);
+        if (usb2can_bridge_canfd_ext_frame_to_payload(
+                &fd_ext_frame, g_usb2can_tx_payload_buffer,
+                sizeof(g_usb2can_tx_payload_buffer), &payload_length) !=
+            kUsb2CanStatusOk) {
+          continue;
+        }
+        packet.cmd = kUsb2CanCommandCanFdExtRxReport;
+      } else if (frame.is_extended_id) {
+        printf("[usb2can][usb-tx-task] drop unsupported extended rx mode=%u id=0x%08lX\n",
+               (unsigned int)frame.mode, (unsigned long)frame.can_id);
+        continue;
+      } else if (frame.mode != kUsb2CanModeCan2Std) {
+        Usb2CanFdStandardFrame fd_frame = {
+            .can_id = (uint16_t)frame.can_id,
             .data_length = frame.data_length,
         };
         memcpy(fd_frame.payload, frame.payload, frame.data_length);
@@ -588,6 +656,10 @@ static void usb2can_app_usb_tx_task(void* parameter) {
           continue;
         }
         packet.cmd = kUsb2CanCommandCanFdRxReport;
+      } else {
+        printf("[usb2can][usb-tx-task] drop unsupported extended can2 rx id=0x%08lX\n",
+               (unsigned long)frame.can_id);
+        continue;
       }
       packet.len = (uint16_t)payload_length;
 

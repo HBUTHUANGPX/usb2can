@@ -80,4 +80,14 @@ Usb2CanStatus usb2can_can_send(const Usb2CanStandardFrame* frame);
 Usb2CanStatus usb2can_can_send_fd(const Usb2CanFdStandardFrame* frame,
                                   bool enable_brs);
 
+/**
+ * @brief 发送一条 CAN FD 扩展数据帧。
+ *
+ * @param frame 待发送的 CAN FD 扩展帧。
+ * @param enable_brs 是否启用 BRS。
+ * @return 发送状态。
+ */
+Usb2CanStatus usb2can_can_send_fd_ext(const Usb2CanFdExtendedFrame* frame,
+                                      bool enable_brs);
+
 #endif  // USB2CAN_INC_USB2CAN_CAN_H_

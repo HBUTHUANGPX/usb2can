@@ -61,6 +61,10 @@ typedef enum Usb2CanCommand {
   kUsb2CanCommandCanFdTx = 0x03,
   /** @brief MCU 将收到的一条 CAN FD 标准帧上报给主机。 */
   kUsb2CanCommandCanFdRxReport = 0x04,
+  /** @brief 主机请求 MCU 发送一条 CAN FD 扩展帧。 */
+  kUsb2CanCommandCanFdExtTx = 0x05,
+  /** @brief MCU 将收到的一条 CAN FD 扩展帧上报给主机。 */
+  kUsb2CanCommandCanFdExtRxReport = 0x06,
   /** @brief 主机查询当前活动模式。 */
   kUsb2CanCommandGetMode = 0x10,
   /** @brief MCU 回复当前活动模式。 */
@@ -153,6 +157,21 @@ typedef struct Usb2CanFdStandardFrame {
 } Usb2CanFdStandardFrame;
 
 /**
+ * @brief 表示一条 CAN FD 扩展数据帧。
+ *
+ * 该结构用于透明承载 29-bit 扩展 ID 的 CAN FD 数据帧。BRS 仍由当前活动模式
+ * 决定，不在该结构中单独建模。
+ */
+typedef struct Usb2CanFdExtendedFrame {
+  /** @brief 29-bit 扩展帧 ID，仅低 29 位有效。 */
+  uint32_t can_id;
+  /** @brief 实际数据区长度，取值遵循 CAN FD 支持的离散长度集合。 */
+  uint8_t data_length;
+  /** @brief CAN FD 数据区，实际使用前 data_length 个字节。 */
+  uint8_t payload[USB2CAN_CANFD_MAX_PAYLOAD_SIZE];
+} Usb2CanFdExtendedFrame;
+
+/**
  * @brief 表示一条用于 CAN 适配层与应用层之间传递的总线帧。
  *
  * 该结构统一承载经典 CAN 与 CAN FD 标准帧，便于模式切换后复用同一套任务队列
@@ -161,8 +180,10 @@ typedef struct Usb2CanFdStandardFrame {
 typedef struct Usb2CanBusFrame {
   /** @brief 当前帧所属的模式。 */
   Usb2CanMode mode;
-  /** @brief 11-bit 标准帧 ID，仅低 11 位有效。 */
-  uint16_t can_id;
+  /** @brief 是否使用 29-bit 扩展 ID。 */
+  bool is_extended_id;
+  /** @brief CAN ID。标准帧仅低 11 位有效，扩展帧仅低 29 位有效。 */
+  uint32_t can_id;
   /** @brief 实际数据长度。CAN2 范围为 0~8，CAN FD 为 0~64。 */
   uint8_t data_length;
   /** @brief 负载字节。 */

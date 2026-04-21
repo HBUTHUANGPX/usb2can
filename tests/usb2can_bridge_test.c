@@ -139,11 +139,76 @@ static void test_canfd_payload_rejects_invalid_values(void) {
               "非法 CAN FD 负载长度应被拒绝");
 }
 
+static void test_canfd_extended_payload_round_trip(void) {
+  Usb2CanFdExtendedFrame input_frame = {
+      .can_id = 0x00008001UL,
+      .data_length = 12U,
+      .payload = {0x00U, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U,
+                  0x06U, 0x07U, 0x08U, 0x09U, 0x0AU, 0x0BU},
+  };
+  Usb2CanFdExtendedFrame decoded_frame;
+  uint8_t encoded[80] = {0};
+  size_t encoded_length = 0U;
+
+  expect_true(usb2can_bridge_canfd_ext_frame_to_payload(
+                  &input_frame, encoded, sizeof(encoded), &encoded_length) ==
+                  kUsb2CanStatusOk,
+              "CAN FD 扩展帧编码应成功");
+  expect_true(encoded_length == 17U,
+              "12 字节 CAN FD 扩展负载编码后长度应为 17");
+  expect_true(encoded[0] == 0x01U && encoded[1] == 0x80U &&
+                  encoded[2] == 0x00U && encoded[3] == 0x00U,
+              "CAN FD 扩展帧编码结果应包含 32-bit 小端 CAN ID");
+  expect_true(encoded[4] == 12U, "CAN FD 扩展帧编码结果应保存实际数据长度");
+
+  expect_true(usb2can_bridge_payload_to_canfd_ext_frame(
+                  encoded, encoded_length, &decoded_frame) ==
+                  kUsb2CanStatusOk,
+              "CAN FD 扩展负载解码应成功");
+  expect_true(decoded_frame.can_id == input_frame.can_id,
+              "CAN FD 扩展解码后 ID 应一致");
+  expect_true(decoded_frame.data_length == input_frame.data_length,
+              "CAN FD 扩展解码后长度应一致");
+  expect_true(memcmp(decoded_frame.payload, input_frame.payload,
+                     input_frame.data_length) == 0,
+              "CAN FD 扩展解码后数据区应一致");
+}
+
+static void test_canfd_extended_payload_rejects_invalid_values(void) {
+  Usb2CanFdExtendedFrame invalid_id_frame = {
+      .can_id = 0x20000000UL,
+      .data_length = 12U,
+  };
+  Usb2CanFdExtendedFrame invalid_length_frame = {
+      .can_id = 0x00008001UL,
+      .data_length = 15U,
+  };
+  Usb2CanFdExtendedFrame decoded_frame;
+  uint8_t encoded[80] = {0};
+  size_t encoded_length = 0U;
+  const uint8_t invalid_id_payload[] = {0x00U, 0x00U, 0x00U, 0x20U, 0x00U};
+
+  expect_true(usb2can_bridge_canfd_ext_frame_to_payload(
+                  &invalid_id_frame, encoded, sizeof(encoded),
+                  &encoded_length) == kUsb2CanStatusInvalidArgument,
+              "超过 29-bit 的扩展 CAN ID 应被拒绝");
+  expect_true(usb2can_bridge_canfd_ext_frame_to_payload(
+                  &invalid_length_frame, encoded, sizeof(encoded),
+                  &encoded_length) == kUsb2CanStatusInvalidArgument,
+              "非法 CAN FD 扩展帧长度应被拒绝");
+  expect_true(usb2can_bridge_payload_to_canfd_ext_frame(
+                  invalid_id_payload, sizeof(invalid_id_payload),
+                  &decoded_frame) == kUsb2CanStatusInvalidArgument,
+              "超过 29-bit 的扩展 CAN ID 负载应被拒绝");
+}
+
 int main(void) {
   test_canfd_length_mapping_accepts_canonical_sizes();
   test_canfd_length_mapping_rejects_non_canonical_sizes();
   test_canfd_payload_round_trip();
   test_canfd_payload_rejects_invalid_values();
+  test_canfd_extended_payload_round_trip();
+  test_canfd_extended_payload_rejects_invalid_values();
   printf("usb2can bridge tests passed.\n");
   return 0;
 }

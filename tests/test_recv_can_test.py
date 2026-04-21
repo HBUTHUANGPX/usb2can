@@ -55,6 +55,24 @@ class ParsePacketTest(unittest.TestCase):
         self.assertEqual(decoded["data_length"], 12)
         self.assertEqual(decoded["payload"], bytes(range(12)))
 
+    def test_decode_canfd_ext_frame_from_report(self):
+        packet = {
+            "cmd": recv_can_test.CMD_CANFD_EXT_RX_REPORT,
+            "data": bytes([0x01, 0x80, 0x00, 0x00, 0x0C]) + bytes(range(12)),
+            "raw_frame": bytes(
+                [0xA5, 0x06, 0x11, 0x00, 0x00, 0x00, 0x00]
+                + [0x01, 0x80, 0x00, 0x00, 0x0C]
+                + list(range(12))
+            ),
+        }
+
+        decoded = recv_can_test.decode_packet(packet)
+
+        self.assertEqual(decoded["kind"], "canfd_ext_rx")
+        self.assertEqual(decoded["can_id"], 0x8001)
+        self.assertEqual(decoded["data_length"], 12)
+        self.assertEqual(decoded["payload"], bytes(range(12)))
+
     def test_decode_get_mode_response(self):
         packet = {
             "cmd": recv_can_test.CMD_GET_MODE_RSP,
@@ -144,6 +162,25 @@ class FormatMessageTest(unittest.TestCase):
         self.assertIn("CANFD_RX", message)
         self.assertIn("len=12", message)
         self.assertIn("00 01 02 03 04 05 06 07 08 09 0A 0B", message)
+
+    def test_format_canfd_ext_rx_message_contains_expected_fields(self):
+        message = recv_can_test.format_decoded_message(
+            {
+                "kind": "canfd_ext_rx",
+                "can_id": 0x8001,
+                "data_length": 12,
+                "payload": bytes(range(12)),
+                "raw_frame": bytes(
+                    [0xA5, 0x06, 0x11, 0x00, 0x00, 0x00, 0x00]
+                    + [0x01, 0x80, 0x00, 0x00, 0x0C]
+                    + list(range(12))
+                ),
+            }
+        )
+
+        self.assertIn("CANFD_EXT_RX", message)
+        self.assertIn("0x00008001", message)
+        self.assertIn("len=12", message)
 
     def test_format_set_mode_response_contains_expected_fields(self):
         message = recv_can_test.format_decoded_message(

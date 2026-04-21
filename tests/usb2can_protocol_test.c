@@ -186,6 +186,7 @@ static void test_bridge_rejects_invalid_dlc(void) {
  */
 static void test_shared_canfd_mode_types_exist(void) {
   Usb2CanFdStandardFrame frame = {0};
+  Usb2CanFdExtendedFrame extended_frame = {0};
 
   expect_true(kUsb2CanModeCan2Std == 0x00U, "CAN2 标准模式值应固定");
   expect_true(kUsb2CanModeCanFdStd == 0x01U, "CAN FD 标准模式值应固定");
@@ -207,7 +208,13 @@ static void test_shared_canfd_mode_types_exist(void) {
   expect_true(kUsb2CanCommandCanFdTx == 0x03U, "CAN FD TX 命令字应固定");
   expect_true(kUsb2CanCommandCanFdRxReport == 0x04U,
               "CAN FD RX 上报命令字应固定");
+  expect_true(kUsb2CanCommandCanFdExtTx == 0x05U,
+              "CAN FD 扩展 TX 命令字应固定");
+  expect_true(kUsb2CanCommandCanFdExtRxReport == 0x06U,
+              "CAN FD 扩展 RX 上报命令字应固定");
   expect_true(sizeof(frame.payload) == 64U, "CAN FD 帧最大负载应为 64 字节");
+  expect_true(sizeof(extended_frame.payload) == 64U,
+              "CAN FD 扩展帧最大负载应为 64 字节");
 }
 
 /**
@@ -269,7 +276,7 @@ static void test_protocol_encode_decode_control_packets(void) {
  * @brief 验证协议与桥接缓冲区足以承载最大 CAN FD 协议帧。
  */
 static void test_canfd_buffer_configuration_is_large_enough(void) {
-  const size_t max_canfd_payload_length = 2U + 1U + USB2CAN_CANFD_MAX_PAYLOAD_SIZE;
+  const size_t max_canfd_payload_length = 4U + 1U + USB2CAN_CANFD_MAX_PAYLOAD_SIZE;
   const size_t max_protocol_frame_length =
       USB2CAN_PROTOCOL_HEADER_SIZE + USB2CAN_PROTOCOL_CRC16_SIZE +
       max_canfd_payload_length;

@@ -80,6 +80,19 @@ class BuildPacketTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             send_can_test.build_canfd_protocol_frame(0x123, bytes(range(15)))
 
+    def test_build_canfd_ext_protocol_frame_uses_u32_identifier(self):
+        payload = bytes(range(12))
+
+        frame = send_can_test.build_canfd_ext_protocol_frame(0x8001, payload)
+        packet = send_can_test.parse_protocol_frame(frame)
+
+        self.assertEqual(packet["cmd"], send_can_test.CMD_CANFD_EXT_TX)
+        self.assertEqual(packet["data"], bytes([0x01, 0x80, 0x00, 0x00, 0x0C]) + payload)
+
+    def test_build_canfd_ext_protocol_frame_rejects_non_canonical_length(self):
+        with self.assertRaises(ValueError):
+            send_can_test.build_canfd_ext_protocol_frame(0x8001, bytes(range(15)))
+
 
 class ParseArgsTest(unittest.TestCase):
     def test_parse_args_uses_expected_defaults(self):
@@ -91,6 +104,7 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual(args.mode, "can2")
         self.assertEqual(args.count, 0)
         self.assertAlmostEqual(args.interval, 0.1)
+        self.assertEqual(args.frame_format, "std")
 
     def test_parse_args_accepts_finite_burst_mode(self):
         args = send_can_test.parse_args(["--count", "10", "--interval", "0.01"])
@@ -117,6 +131,33 @@ class ParseArgsTest(unittest.TestCase):
         args = send_can_test.parse_args(["--mode", "canfd-brs", "--data", "00 01 02 03 04 05 06 07 08 09 0A 0B"])
 
         self.assertEqual(args.mode, "canfd-brs")
+
+    def test_parse_args_accepts_canfd_brs_extended_frame(self):
+        args = send_can_test.parse_args(
+            [
+                "--mode",
+                "canfd-brs",
+                "--frame-format",
+                "ext",
+                "--can-id",
+                "0x8001",
+                "--data",
+                "00 01 02 03 04 05 06 07 08 09 0A 0B",
+            ]
+        )
+
+        self.assertEqual(args.frame_format, "ext")
+
+    def test_parse_args_rejects_extended_frame_outside_canfd_brs(self):
+        with self.assertRaises(SystemExit):
+            send_can_test.parse_args(["--mode", "canfd", "--frame-format", "ext"])
+
+    def test_parse_can_id_accepts_29_bit_extended_id(self):
+        self.assertEqual(send_can_test.parse_can_id("0x1FFFFFFF", "ext"), 0x1FFFFFFF)
+
+    def test_parse_can_id_rejects_extended_id_for_standard_format(self):
+        with self.assertRaises(Exception):
+            send_can_test.parse_can_id("0x8001", "std")
 
     def test_parse_args_accepts_query_mode(self):
         args = send_can_test.parse_args(["--query", "get-mode", "--read-response"])

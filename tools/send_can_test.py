@@ -11,6 +11,7 @@ from typing import Iterable
 PROTOCOL_HEAD = 0xA5
 CMD_CAN_TX = 0x01
 CMD_CANFD_TX = 0x03
+CMD_CANFD_EXT_TX = 0x05
 CMD_GET_MODE = 0x10
 CMD_GET_CAPABILITY = 0x14
 CMD_SET_MODE = 0x12
@@ -52,8 +53,12 @@ def crc16(data: bytes) -> int:
     return crc & 0xFFFF
 
 
-def parse_can_id(text: str) -> int:
+def parse_can_id(text: str, frame_format: str = "std") -> int:
     can_id = int(text, 0)
+    if frame_format == "ext":
+        if not 0 <= can_id <= 0x1FFFFFFF:
+            raise argparse.ArgumentTypeError("Extended CAN ID must be in range 0x00000000-0x1FFFFFFF")
+        return can_id
     if not 0 <= can_id <= 0x7FF:
         raise argparse.ArgumentTypeError("CAN ID must be in range 0x000-0x7FF")
     return can_id
@@ -89,6 +94,23 @@ def build_raw_protocol_frame(cmd: int, data: bytes) -> bytes:
     return header + header_crc + data_crc + data
 
 
+def parse_protocol_frame(raw_frame: bytes) -> dict:
+    if len(raw_frame) < 7:
+        raise ValueError("frame too short")
+    if raw_frame[0] != PROTOCOL_HEAD:
+        raise ValueError(f"unexpected head byte: 0x{raw_frame[0]:02X}")
+    payload_length = int.from_bytes(raw_frame[2:4], byteorder="little")
+    expected_length = 7 + payload_length
+    if len(raw_frame) != expected_length:
+        raise ValueError(f"frame length mismatch: expected {expected_length}, got {len(raw_frame)}")
+    if raw_frame[4] != crc8(raw_frame[:4]):
+        raise ValueError("crc8 mismatch")
+    payload = raw_frame[7:]
+    if int.from_bytes(raw_frame[5:7], byteorder="little") != crc16(payload):
+        raise ValueError("crc16 mismatch")
+    return {"cmd": raw_frame[1], "len": payload_length, "data": payload, "raw_frame": raw_frame}
+
+
 def build_protocol_frame(can_id: int, payload: bytes) -> bytes:
     if len(payload) > 8:
         raise ValueError("CAN2 payload supports at most 8 bytes")
@@ -119,6 +141,13 @@ def build_canfd_protocol_frame(can_id: int, payload: bytes) -> bytes:
     return build_raw_protocol_frame(CMD_CANFD_TX, data)
 
 
+def build_canfd_ext_protocol_frame(can_id: int, payload: bytes) -> bytes:
+    if len(payload) not in CANFD_VALID_LENGTHS:
+        raise ValueError("CAN FD payload length must be one of 0..8,12,16,20,24,32,48,64")
+    data = can_id.to_bytes(4, byteorder="little") + bytes([len(payload)]) + payload
+    return build_raw_protocol_frame(CMD_CANFD_EXT_TX, data)
+
+
 def build_batched_frames(frame: bytes, count: int) -> bytes:
     if count < 0:
         raise ValueError("count must be >= 0")
@@ -136,6 +165,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Active communication mode to request before data transmission.",
     )
     parser.add_argument("--can-id", default=hex(DEFAULT_CAN_ID), help="Standard CAN ID, e.g. 0x123.")
+    parser.add_argument(
+        "--frame-format",
+        choices=["std", "ext"],
+        default="std",
+        help="CAN frame identifier format. Extended format is supported only in canfd-brs mode.",
+    )
     parser.add_argument(
         "--data",
         default=format_hex(DEFAULT_DATA),
@@ -193,6 +228,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--query cannot be used with --skip-mode-select")
     if args.set_mode_only and args.skip_mode_select:
         parser.error("--set-mode-only cannot be used with --skip-mode-select")
+    if args.frame_format == "ext" and args.mode != "canfd-brs":
+        parser.error("--frame-format ext requires --mode canfd-brs")
+    try:
+        parse_can_id(args.can_id, args.frame_format)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
     if args.mode == "can2" and len(parse_data_bytes(args.data)) > 8:
         parser.error("CAN2 mode payload supports at most 8 bytes")
     if args.mode != "can2" and len(parse_data_bytes(args.data)) not in CANFD_VALID_LENGTHS:
@@ -208,11 +249,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     args = parse_args(argv)
-    can_id = parse_can_id(args.can_id)
+    can_id = parse_can_id(args.can_id, args.frame_format)
     payload = parse_data_bytes(args.data)
     mode_id = MODE_NAME_TO_ID[args.mode]
     mode_frame = build_set_mode_frame(mode_id)
-    frame = build_protocol_frame(can_id, payload) if args.mode == "can2" else build_canfd_protocol_frame(can_id, payload)
+    if args.mode == "can2":
+        frame = build_protocol_frame(can_id, payload)
+    elif args.frame_format == "ext":
+        frame = build_canfd_ext_protocol_frame(can_id, payload)
+    else:
+        frame = build_canfd_protocol_frame(can_id, payload)
     query_frame = None
     if args.query == "get-mode":
         query_frame = build_get_mode_frame()
@@ -220,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         query_frame = build_get_capability_frame()
 
     print(f"port: {args.port}")
-    print(f"can_id: 0x{can_id:03X}")
+    print(f"can_id: 0x{can_id:08X}" if args.frame_format == "ext" else f"can_id: 0x{can_id:03X}")
     print(f"mode_select[{len(mode_frame)}]: {format_hex(mode_frame)}")
     if args.query is not None:
         print(f"query_frame[{len(query_frame)}]: {format_hex(query_frame)}")
@@ -229,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"payload[{len(payload)}]: {format_hex(payload)}")
         print(f"usb_frame[{len(frame)}]: {format_hex(frame)}")
         print(f"active_mode: {args.mode}")
+        print(f"frame_format: {args.frame_format}")
         if args.count == 0:
             print("mode: continuous")
         elif args.pack_count:

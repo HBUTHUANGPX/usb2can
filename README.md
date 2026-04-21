@@ -18,8 +18,8 @@ The current firmware supports these runtime modes:
 
 Current scope:
 
-- standard `11-bit CAN ID` only
-- standard frames only, no extended frames
+- CAN2.0 and regular CAN FD data commands keep `11-bit CAN ID` standard frames
+- CAN FD BRS additionally supports `29-bit CAN ID` extended frames
 - no motor-specific business semantics
 - `1 USB packet <-> 1 CAN/CAN FD frame`
 
@@ -72,7 +72,7 @@ after MCAN initialization.
 Recommended full bench-side stress command:
 
 ```bash
-conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst canfd-brs-ext-burst
 ```
 
 The stress runner confirms the target mode before each burst, then sends data
@@ -102,11 +102,13 @@ Field meanings:
 
 ## Endianness
 
-All 16-bit fields are little-endian:
+Multi-byte fields are little-endian:
 
 - `len`
 - `crc16`
-- `can_id` inside `data[]`
+- standard-frame `can_id` inside `data[]` is 16-bit little-endian
+- extended-frame `can_id` inside `data[]` is 32-bit little-endian, with only
+  the lower 29 bits valid
 - `mode_bitmap` inside `GET_CAPABILITY_RSP`
 
 ## Mode Values
@@ -117,7 +119,7 @@ Mode definitions are in [usb2can_types.h](inc/usb2can_types.h).
 |---|---|---|
 | `0x00` | `CAN2_STD` | Classic CAN2.0 standard frame |
 | `0x01` | `CANFD_STD` | CAN FD standard frame with `BRS=0` |
-| `0x02` | `CANFD_STD_BRS` | CAN FD standard frame with `BRS=1` |
+| `0x02` | `CANFD_STD_BRS` | CAN FD standard or extended frame with `BRS=1` |
 
 ## Command Set
 
@@ -140,6 +142,8 @@ Mode definitions are in [usb2can_types.h](inc/usb2can_types.h).
 | `0x02` | `CMD_CAN_RX_REPORT` | Device -> Host | Report one classic CAN standard frame in `CAN2_STD` mode |
 | `0x03` | `CMD_CANFD_TX` | Host -> Device | Send one CAN FD standard frame in `CANFD_STD/CANFD_STD_BRS` mode |
 | `0x04` | `CMD_CANFD_RX_REPORT` | Device -> Host | Report one CAN FD standard frame in `CANFD_STD/CANFD_STD_BRS` mode |
+| `0x05` | `CMD_CANFD_EXT_TX` | Host -> Device | Send one CAN FD extended frame in `CANFD_STD_BRS` mode |
+| `0x06` | `CMD_CANFD_EXT_RX_REPORT` | Device -> Host | Report one CAN FD extended frame in `CANFD_STD_BRS` mode |
 | `0x7F` | `CMD_ERROR_REPORT` | Device -> Host | Report parser, validation, or low-level I/O errors |
 
 ## Control Plane Payloads
@@ -258,12 +262,41 @@ So:
 
 - `len = 3 + data_len`
 
+### CAN FD Extended Payload
+
+Used by `CMD_CANFD_EXT_TX` and `CMD_CANFD_EXT_RX_REPORT`:
+
+```text
++------------+----------+----------------------+
+| can_id     | data_len | payload[data_len]    |
+| 4 bytes LE | 1 byte   | 0~64 bytes           |
++------------+----------+----------------------+
+```
+
+Constraints:
+
+- `can_id` range: `0x00000000 ~ 0x1FFFFFFF`
+- `data_len` is the actual payload byte count, not raw DLC encoding
+- accepted canonical CAN FD lengths:
+  - `0..8`
+  - `12`
+  - `16`
+  - `20`
+  - `24`
+  - `32`
+  - `48`
+  - `64`
+- the extended-frame command is currently accepted only in `CANFD_STD_BRS`
+
+So:
+
+- `len = 5 + data_len`
+
 ### BRS Behavior
 
 - `CANFD_STD` sends CAN FD with `BRS=0`
-- `CANFD_STD_BRS` sends CAN FD with `BRS=1`
-- USB payload format is the same in both modes; only the active mode and MCAN
-  configuration differ
+- `CANFD_STD_BRS` sends CAN FD standard or extended frames with `BRS=1`
+- BRS is mode-driven and is not carried as a per-frame flag in the USB payload
 
 ## Error Codes
 
@@ -277,7 +310,7 @@ When the device sends `CMD_ERROR_REPORT`:
 | Value | Name | Meaning |
 |---|---|---|
 | `0x00` | `None` | No error |
-| `0x01` | `InvalidArgument` | Invalid parameter, such as `can_id > 0x7FF` |
+| `0x01` | `InvalidArgument` | Invalid parameter, such as standard `can_id > 0x7FF` or extended `can_id > 0x1FFFFFFF` |
 | `0x02` | `BufferTooSmall` | Buffer is too small |
 | `0x03` | `ChecksumError` | CRC8 or CRC16 failed |
 | `0x04` | `LengthError` | `len`, `dlc`, `data_len`, or actual payload size mismatch |
@@ -291,6 +324,8 @@ When the device sends `CMD_ERROR_REPORT`:
 - control-plane commands are valid in any mode
 - after `SET_MODE` succeeds, the device immediately switches mode
 - old-mode data commands are rejected after switching
+- extended-frame data commands are accepted only in `CANFD_STD_BRS` and rejected
+  in `CAN2_STD/CANFD_STD`
 - if switching fails, the previous mode is kept
 
 ## Host Tools
@@ -332,6 +367,12 @@ Send one 12-byte CAN FD frame:
 python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
 ```
 
+Send one 12-byte CAN FD BRS extended frame:
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --frame-format ext --can-id 0x8001 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
+```
+
 Send data without an automatic `SET_MODE` first:
 
 ```bash
@@ -370,6 +411,7 @@ Current key firmware logs include:
 
 - `[usb2can][app] reject can2 cmd in active mode=...`
 - `[usb2can][app] reject canfd cmd in active mode=...`
+- `[usb2can][app] reject canfd ext cmd in active mode=...`
 
 ### RX forwarding filter logs
 
@@ -379,6 +421,7 @@ Current key firmware logs include:
 
 - `[usb2can][can] mcan_transmit_blocking failed`
 - `[usb2can][can] mcan_transmit_blocking fd failed ...`
+- `[usb2can][can] mcan_transmit_blocking fd ext failed ...`
 - `[usb2can][can] tx fail status=... ir=... lec=... dlec=... act=... tec=... rec=... busoff=... tdcv=...`
 
 ## Current Implementation Files
