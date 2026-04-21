@@ -1,6 +1,6 @@
 # USB2CAN 压测方案与执行记录
 
-更新日期：2026-04-17
+更新日期：2026-04-21
 
 ## 1. 目标
 
@@ -23,7 +23,7 @@
 建议先进入目录：
 
 ```bash
-cd /home/hpx/HPXLoco_5/hpm_work/usb2can/.worktrees/usb2can-canfd-mode
+cd /home/hpx/HPXLoco_5/hpm_work/usb2can
 source "$HOME/miniconda3/etc/profile.d/conda.sh"
 conda activate usb2can
 ```
@@ -42,12 +42,26 @@ python tools/run_stress_test.py --dry-run
 - `CAN2 4-byte` 突发发送
 - `CANFD 12-byte` 突发发送
 - `CANFD_BRS 64-byte` 突发发送
+- 每个 burst 前先执行 `SET_MODE --read-response`，确认目标模式后再发数据
+- burst 默认帧间隔为 `0.001s`
 
 也可以只跑指定场景，例如：
 
 ```bash
 python tools/run_stress_test.py --scenarios mode-switch canfd-brs-burst
 ```
+
+完整台架压测推荐命令：
+
+```bash
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst
+```
+
+说明：
+
+- 普通稳定性压测建议保留默认 `--burst-interval 0.001`
+- `--burst-interval 0` 只用于专门触发和观察 CAN TX ring overflow
+- burst 阶段内部使用 `--skip-mode-select`，避免模式切换确认阶段影响数据帧计数
 
 ## 3. 基础控制面检查
 
@@ -60,7 +74,7 @@ python tools/send_can_test.py --query get-mode --read-response
 预期：
 
 - 返回 `GET_MODE_RSP`
-- 上电默认 `mode=0x00`
+- 上电默认 `mode=0x02`，即 `CANFD_STD_BRS`
 
 ### 3.2 查询能力
 
@@ -114,7 +128,7 @@ python tools/send_can_test.py --query get-mode --read-response
 ### 5.1 CAN2 连发
 
 ```bash
-python tools/send_can_test.py --mode can2 --can-id 0x123 --data "11 22 33 44" --count 100 --interval 0
+python tools/send_can_test.py --mode can2 --can-id 0x123 --data "11 22 33 44" --count 100 --interval 0.001
 ```
 
 观察点：
@@ -123,10 +137,12 @@ python tools/send_can_test.py --mode can2 --can-id 0x123 --data "11 22 33 44" --
 - 是否有错误上报
 - 是否有明显丢帧
 
+`--interval 0` 更适合作为极限写入或 ring overflow 触发测试。
+
 ### 5.2 CAN FD 12-byte 连发
 
 ```bash
-python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 100 --interval 0
+python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 100 --interval 0.001
 ```
 
 观察点：
@@ -142,7 +158,7 @@ DATA64="$(python3 - <<'PY'
 print(' '.join(f'{i:02X}' for i in range(64)))
 PY
 )"
-python tools/send_can_test.py --mode canfd-brs --can-id 0x123 --data "$DATA64" --count 100 --interval 0
+python tools/send_can_test.py --mode canfd-brs --can-id 0x123 --data "$DATA64" --count 100 --interval 0.001
 ```
 
 观察点：
@@ -163,6 +179,7 @@ python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04
 - 批量 CDC 写入后，固件能否完整消费
 - 是否出现协议解析错误
 - 是否出现 CAN TX ring overflow
+- 该项是极限写入测试，不作为普通稳定性压测的默认节奏
 
 ## 6. CAN -> USB 压测
 
@@ -248,7 +265,7 @@ python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04
 压测时建议同时记录以下日志：
 
 - `[usb2can][can] reconfigure begin old=... new=...`
-- `[usb2can][can] active mode=...`
+- `[usb2can][can] active mode=... clock=... baud=... sp=... baud_fd=... sp_fd=... canfd=... tdc=... dbtp=... tdcr=...`
 - `[usb2can][app] active mode switched to ...`
 - `[usb2can][app] reject can2 cmd in active mode=...`
 - `[usb2can][app] reject canfd cmd in active mode=...`
@@ -256,6 +273,7 @@ python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04
 - `[usb2can][usb-tx-task] can rx ring overflow count=...`
 - `[usb2can][can] mcan_transmit_blocking failed`
 - `[usb2can][can] mcan_transmit_blocking fd failed ...`
+- `[usb2can][can] tx fail status=... ir=... lec=... dlec=... tec=... rec=... busoff=... tdcv=...`
 
 ## 9. 通过标准
 
@@ -306,3 +324,30 @@ python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04
 - `CANFD_BRS 64-byte` 抓包确认 `BRS=1`
 - `CAN -> USB` 方向的 `100` 帧与 `1000` 帧连续回传
 - 模式错配测试下总线侧“确实不发帧”
+
+## 11. 2026-04-21 补充验证结果
+
+以下内容已在主分支、默认 `CANFD_STD_BRS`、仲裁相位 `1 Mbps/80%`、数据相位
+`5 Mbps/75%`、TDC 开启的固件上完成：
+
+- 上电日志确认默认模式为 `mode=2`
+- CAN 分析仪已能看到 `CANFD_STD_BRS` 数据帧
+- `--burst-count 500 --burst-interval 0` 会触发 `can tx ring overflow`，符合极限写入预期
+- 默认 `--burst-interval 0.001` 下不再出现 ring overflow
+- 已执行完整压测：
+
+```bash
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst
+```
+
+抓包结果：
+
+- `0..199` 为 `CAN2.0` 帧
+- `200..399` 为 `CANFD` 帧
+- `400..599` 为 `CANFD BRS` 帧
+
+结论：
+
+- 模式切换与 burst 数据发送解耦后，三种数据面各 `200` 帧均可稳定抓取
+- 压测脚本的默认 `0.001s` 节流适合作为当前台架的稳定性基准
+- 如需验证固件 ring overflow 日志，显式使用 `--burst-interval 0`

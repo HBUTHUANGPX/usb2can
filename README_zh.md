@@ -33,6 +33,8 @@
 - CAN 仲裁相位采样点：`80%`
 - CAN FD 数据相位波特率：`5000000 bps`
 - CAN FD 数据相位采样点：`75%`
+- CAN FD 发送延迟补偿：默认开启
+- CAN FD TDC SSP 偏移/滤波窗口：`0`，表示由 HPM SDK 自动计算
 - USB 总线编号：`0`
 - CDC IN 端点：`0x81`
 - CDC OUT 端点：`0x01`
@@ -46,11 +48,34 @@
 - 模式切换不持久化，设备重启后恢复 `CANFD_STD_BRS`
 - 切换成功后，设备只接受当前活动模式对应的数据命令
 
+## CAN FD 时序说明
+
+当前默认 CAN FD BRS 时序针对现有台架配置：
+
+- 仲裁相位：`1 Mbps`，采样点 `80%`
+- 数据相位：`5 Mbps`，采样点 `75%`
+- 默认开启 TDC，保证 `5 Mbps` BRS 发送稳定
+
+如果 CAN 分析仪在 BRS 测试时提示数据相位位错误，优先确认分析仪的仲裁/数据
+波特率和采样点是否一致。板级日志中应能看到 `tdc=1`，并且 MCAN 初始化后
+`TDCR` 有非零有效值。
+
 ## 压测入口
 
 - 主机侧自动压测脚本：`python tools/run_stress_test.py --dry-run`
 - 中文压测方案与执行记录：[docs/2026-04-17-usb2can-stress-test-plan.md](docs/2026-04-17-usb2can-stress-test-plan.md)
 - English stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan-en.md](docs/2026-04-17-usb2can-stress-test-plan-en.md)
+
+推荐完整台架压测命令：
+
+```bash
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst
+```
+
+压测脚本会在每个 burst 前先确认目标模式，再使用 `--skip-mode-select` 发送纯
+数据 burst。默认 `--burst-interval` 为 `0.001` 秒，避免主机写入速度超过 CAN
+总线消耗速度而打满固件 CAN TX ring。只有在专门验证 ring overflow 行为时，才
+建议使用 `--burst-interval 0`。
 
 ## 线协议格式
 
@@ -311,6 +336,16 @@ python tools/send_can_test.py --mode canfd-brs --set-mode-only --read-response
 python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
 ```
 
+在不自动发送 `SET_MODE` 的情况下发送数据：
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --skip-mode-select --can-id 0x123 --data "00 01 02 03 04 05 06 07" --count 10 --interval 0.001
+```
+
+`--skip-mode-select` 只应在已经确认设备处于目标模式后使用，例如先执行
+`--set-mode-only --read-response`。压测脚本正是用这种方式把模式切换耗时从
+burst 帧计数里剥离出来。
+
 监听设备回传：
 
 ```bash
@@ -323,9 +358,12 @@ python tools/recv_can_test.py --port /dev/ttyACM0
 
 ### 模式与 MCAN 配置日志
 
-- `[usb2can][can] init requested mode=... baud=... sp=... baud_fd=... sp_fd=...`
-- `[usb2can][can] active mode=... baud=... sp=... baud_fd=... sp_fd=... canfd=...`
+- `[usb2can][app] init protocol_head=... mode=... can_baudrate=... can_sp=... canfd_data_baudrate=... canfd_data_sp=... canfd_tdc=...`
+- `[usb2can][can] init requested mode=... baud=... sp=... baud_fd=... sp_fd=... tdc=... tdco=... tdcf=...`
+- `[usb2can][can] active mode=... clock=... baud=... sp=... baud_fd=... sp_fd=... canfd=... tdc=... tdco_cfg=... tdcf_cfg=... dbtp=... tdcr=...`
 - `[usb2can][can] reconfigure begin old=... new=...`
+- `[usb2can][can] reconfigure recovering bus-off mode=...`
+- `[usb2can][can] reconfigure skipped mode=... unchanged`
 
 ### App 层模式切换日志
 
@@ -345,6 +383,7 @@ python tools/recv_can_test.py --port /dev/ttyACM0
 
 - `[usb2can][can] mcan_transmit_blocking failed`
 - `[usb2can][can] mcan_transmit_blocking fd failed ...`
+- `[usb2can][can] tx fail status=... ir=... lec=... dlec=... act=... tec=... rec=... busoff=... tdcv=...`
 
 ## 当前实现文件
 

@@ -35,6 +35,8 @@ Default values include:
 - CAN nominal/arbitration sample point: `80%`
 - CAN FD data bitrate: `5000000 bps`
 - CAN FD data sample point: `75%`
+- CAN FD transmitter delay compensation: enabled by default
+- CAN FD TDC SSP offset/filter window: `0`, meaning HPM SDK auto calculation
 - USB bus id: `0`
 - CDC IN endpoint: `0x81`
 - CDC OUT endpoint: `0x01`
@@ -48,11 +50,35 @@ Default values include:
 - Selected mode is not persisted
 - After a successful switch, only the active mode's data commands are accepted
 
+## CAN FD Timing Notes
+
+The default CAN FD BRS timing is tuned for the current bench setup:
+
+- nominal/arbitration phase: `1 Mbps`, `80%` sample point
+- data phase: `5 Mbps`, `75%` sample point
+- TDC is enabled to keep 5 Mbps BRS transmission stable
+
+If a CAN analyzer reports data-phase bit errors during BRS testing, first verify
+that the analyzer is configured with the same nominal/data bitrates and sample
+points. Board logs should include `tdc=1` plus non-zero effective `TDCR` values
+after MCAN initialization.
+
 ## Stress Entry Points
 
 - Host-side stress runner: `python tools/run_stress_test.py --dry-run`
 - Chinese stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan.md](docs/2026-04-17-usb2can-stress-test-plan.md)
 - English stress plan and execution record: [docs/2026-04-17-usb2can-stress-test-plan-en.md](docs/2026-04-17-usb2can-stress-test-plan-en.md)
+
+Recommended full bench-side stress command:
+
+```bash
+conda run -n usb2can python tools/run_stress_test.py --switch-loops 10 --burst-count 200 --scenarios mode-switch can2-burst canfd-burst canfd-brs-burst
+```
+
+The stress runner confirms the target mode before each burst, then sends data
+with `--skip-mode-select`. Its default `--burst-interval` is `0.001` seconds to
+avoid filling the firmware CAN TX ring faster than the CAN bus can drain it.
+Use `--burst-interval 0` only when intentionally testing ring overflow behavior.
 
 ## Wire Format
 
@@ -306,6 +332,16 @@ Send one 12-byte CAN FD frame:
 python tools/send_can_test.py --mode canfd --can-id 0x123 --data "00 01 02 03 04 05 06 07 08 09 0A 0B" --count 1 --read-response
 ```
 
+Send data without an automatic `SET_MODE` first:
+
+```bash
+python tools/send_can_test.py --mode canfd-brs --skip-mode-select --can-id 0x123 --data "00 01 02 03 04 05 06 07" --count 10 --interval 0.001
+```
+
+Use `--skip-mode-select` only after the device mode has already been confirmed,
+for example by `--set-mode-only --read-response`. This is how the stress runner
+keeps mode-switch latency out of burst frame counts.
+
 Listen for device reports:
 
 ```bash
@@ -318,9 +354,12 @@ Current key firmware logs include:
 
 ### Mode and MCAN configuration logs
 
-- `[usb2can][can] init requested mode=... baud=... sp=... baud_fd=... sp_fd=...`
-- `[usb2can][can] active mode=... baud=... sp=... baud_fd=... sp_fd=... canfd=...`
+- `[usb2can][app] init protocol_head=... mode=... can_baudrate=... can_sp=... canfd_data_baudrate=... canfd_data_sp=... canfd_tdc=...`
+- `[usb2can][can] init requested mode=... baud=... sp=... baud_fd=... sp_fd=... tdc=... tdco=... tdcf=...`
+- `[usb2can][can] active mode=... clock=... baud=... sp=... baud_fd=... sp_fd=... canfd=... tdc=... tdco_cfg=... tdcf_cfg=... dbtp=... tdcr=...`
 - `[usb2can][can] reconfigure begin old=... new=...`
+- `[usb2can][can] reconfigure recovering bus-off mode=...`
+- `[usb2can][can] reconfigure skipped mode=... unchanged`
 
 ### App-level mode switch logs
 
@@ -340,6 +379,7 @@ Current key firmware logs include:
 
 - `[usb2can][can] mcan_transmit_blocking failed`
 - `[usb2can][can] mcan_transmit_blocking fd failed ...`
+- `[usb2can][can] tx fail status=... ir=... lec=... dlec=... act=... tec=... rec=... busoff=... tdcv=...`
 
 ## Current Implementation Files
 
